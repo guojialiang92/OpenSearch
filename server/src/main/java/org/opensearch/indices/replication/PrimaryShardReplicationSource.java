@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.function.BiConsumer;
 
 import static org.opensearch.indices.replication.SegmentReplicationSourceService.Actions.GET_CHECKPOINT_INFO;
+import static org.opensearch.indices.replication.SegmentReplicationSourceService.Actions.GET_MERGED_SEGMENT_FILES;
 import static org.opensearch.indices.replication.SegmentReplicationSourceService.Actions.GET_SEGMENT_FILES;
 
 /**
@@ -95,6 +96,30 @@ public class PrimaryShardReplicationSource implements SegmentReplicationSource {
         transportService.sendRequest(
             sourceNode,
             GET_SEGMENT_FILES,
+            request,
+            TransportRequestOptions.builder().withTimeout(recoverySettings.internalActionLongTimeout()).build(),
+            new ActionListenerResponseHandler<>(listener, GetSegmentFilesResponse::new, ThreadPool.Names.GENERIC)
+        );
+    }
+
+    public void getMergedSegmentFiles(
+        long replicationId,
+        ReplicationCheckpoint checkpoint,
+        List<StoreFileMetadata> filesToFetch,
+        IndexShard indexShard,
+        BiConsumer<String, Long> fileProgressTracker,
+        ActionListener<GetSegmentFilesResponse> listener
+    ) {
+        final GetSegmentFilesRequest request = new GetSegmentFilesRequest(
+            replicationId,
+            targetAllocationId,
+            targetNode,
+            filesToFetch,
+            checkpoint
+        );
+        transportService.sendRequest(
+            sourceNode,
+            GET_MERGED_SEGMENT_FILES,
             request,
             TransportRequestOptions.builder().withTimeout(recoverySettings.internalActionLongTimeout()).build(),
             new ActionListenerResponseHandler<>(listener, GetSegmentFilesResponse::new, ThreadPool.Names.GENERIC)

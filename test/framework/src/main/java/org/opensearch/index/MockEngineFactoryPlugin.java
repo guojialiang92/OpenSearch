@@ -33,16 +33,30 @@ package org.opensearch.index;
 
 import org.apache.lucene.index.FilterDirectoryReader;
 import org.apache.lucene.tests.index.AssertingDirectoryReader;
+import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
+import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.Setting;
+import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.env.Environment;
+import org.opensearch.env.NodeEnvironment;
 import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.plugins.EnginePlugin;
 import org.opensearch.plugins.Plugin;
+import org.opensearch.repositories.RepositoriesService;
+import org.opensearch.script.ScriptService;
 import org.opensearch.test.engine.MockEngineFactory;
 import org.opensearch.test.engine.MockEngineSupport;
+import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.client.Client;
+import org.opensearch.watcher.ResourceWatcherService;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * A plugin to use {@link MockEngineFactory}.
@@ -50,6 +64,7 @@ import java.util.Optional;
  * Subclasses may override the reader wrapper used.
  */
 public class MockEngineFactoryPlugin extends Plugin implements EnginePlugin {
+    private Client client;
 
     @Override
     public List<Setting<?>> getSettings() {
@@ -58,10 +73,28 @@ public class MockEngineFactoryPlugin extends Plugin implements EnginePlugin {
 
     @Override
     public Optional<EngineFactory> getEngineFactory(final IndexSettings indexSettings) {
-        return Optional.of(new MockEngineFactory(getReaderWrapperClass()));
+        return Optional.of(new MockEngineFactory(getReaderWrapperClass(), client));
     }
 
     protected Class<? extends FilterDirectoryReader> getReaderWrapperClass() {
         return AssertingDirectoryReader.class;
+    }
+
+    @Override
+    public Collection<Object> createComponents(
+        Client client,
+        ClusterService clusterService,
+        ThreadPool threadPool,
+        ResourceWatcherService resourceWatcherService,
+        ScriptService scriptService,
+        NamedXContentRegistry xContentRegistry,
+        Environment environment,
+        NodeEnvironment nodeEnvironment,
+        NamedWriteableRegistry namedWriteableRegistry,
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        Supplier<RepositoriesService> repositoriesServiceSupplier
+    ) {
+        this.client = client;
+        return Collections.emptyList();
     }
 }

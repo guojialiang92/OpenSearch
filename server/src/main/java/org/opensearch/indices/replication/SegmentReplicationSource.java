@@ -57,6 +57,15 @@ public interface SegmentReplicationSource {
         ActionListener<GetSegmentFilesResponse> listener
     );
 
+    default void getMergedSegmentFiles(
+        long replicationId,
+        ReplicationCheckpoint checkpoint,
+        List<StoreFileMetadata> filesToFetch,
+        IndexShard indexShard,
+        BiConsumer<String, Long> fileProgressTracker,
+        ActionListener<GetSegmentFilesResponse> listener
+    ) {};
+
     /**
      * Get the source description
      */

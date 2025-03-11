@@ -61,8 +61,10 @@ import org.opensearch.search.pipeline.SearchPipelineService;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -129,6 +131,56 @@ public final class IndexSettings {
             );
         }
     }
+
+    public static final Setting<Boolean> INDEX_MERGED_SEGMENT_PRE_COPY_ENABLED_SETTING = Setting.boolSetting(
+        "index.merged_segment_pre_copy.enable",
+        false,
+        new Setting.Validator<>() {
+
+            @Override
+            public void validate(final Boolean value) {}
+
+            @Override
+            public void validate(final Boolean value, final Map<Setting<?>, Object> settings) {
+                final Object replicationType = settings.get(IndexMetadata.INDEX_REPLICATION_TYPE_SETTING);
+                if (ReplicationType.SEGMENT.equals(replicationType) == false && value) {
+                    throw new IllegalArgumentException(
+                        "To enable "
+                            + INDEX_MERGED_SEGMENT_PRE_COPY_ENABLED_SETTING.getKey()
+                            + ", "
+                            + IndexMetadata.INDEX_REPLICATION_TYPE_SETTING.getKey()
+                            + " should be set to "
+                            + ReplicationType.SEGMENT
+                    );
+                }
+            }
+
+            @Override
+            public Iterator<Setting<?>> settings() {
+                final List<Setting<?>> settings = List.of(IndexMetadata.INDEX_REPLICATION_TYPE_SETTING);
+                return settings.iterator();
+            }
+        },
+        Property.IndexScope,
+        Property.Dynamic
+    );
+
+    public static final Setting<TimeValue> INDEX_MERGE_SEGMENT_PRE_COPY_TIMEOUT_SETTING = Setting.timeSetting(
+        "index.merge_segment_pre_copy_timeout",
+        TimeValue.timeValueMinutes(30),
+        TimeValue.timeValueMinutes(0),
+        Property.IndexScope,
+        Property.Dynamic
+    );
+
+    public static final Setting<ByteSizeValue> INDEX_MERGE_SEGMENT_PRE_COPY_SIZE_THRESHOLD_SETTING = Setting.byteSizeSetting(
+        "index.merge_segment_pre_copy_size_threshold",
+        new ByteSizeValue(100, ByteSizeUnit.MB),
+        new ByteSizeValue(0, ByteSizeUnit.BYTES),
+        new ByteSizeValue(Long.MAX_VALUE, ByteSizeUnit.BYTES),
+        Property.Dynamic,
+        Property.IndexScope
+    );
 
     public static final Setting<List<String>> DEFAULT_FIELD_SETTING = Setting.listSetting(
         "index.query.default_field",
@@ -789,6 +841,9 @@ public final class IndexSettings {
     private final Settings nodeSettings;
     private final int numberOfShards;
     private final ReplicationType replicationType;
+    private volatile boolean isMergedSegmentPreCopyEnable;
+    private volatile TimeValue mergeSegmentPreCopyTimeout;
+    private volatile ByteSizeValue mergeSegmentPreCopySizeThreshold;
     private volatile boolean isRemoteStoreEnabled;
     private final boolean isStoreLocalityPartial;
     private volatile TimeValue remoteTranslogUploadBufferInterval;
@@ -1063,6 +1118,9 @@ public final class IndexSettings {
         setMergeOnFlushPolicy(scopedSettings.get(INDEX_MERGE_ON_FLUSH_POLICY));
         checkPendingFlushEnabled = scopedSettings.get(INDEX_CHECK_PENDING_FLUSH_ENABLED);
         defaultSearchPipeline = scopedSettings.get(DEFAULT_SEARCH_PIPELINE);
+        isMergedSegmentPreCopyEnable = scopedSettings.get(INDEX_MERGED_SEGMENT_PRE_COPY_ENABLED_SETTING);
+        mergeSegmentPreCopyTimeout = scopedSettings.get(INDEX_MERGE_SEGMENT_PRE_COPY_TIMEOUT_SETTING);
+        mergeSegmentPreCopySizeThreshold = scopedSettings.get(INDEX_MERGE_SEGMENT_PRE_COPY_SIZE_THRESHOLD_SETTING);
         /* There was unintentional breaking change got introduced with [OpenSearch-6424](https://github.com/opensearch-project/OpenSearch/pull/6424) (version 2.7).
          * For indices created prior version (prior to 2.7) which has IndexSort type, they used to type cast the SortField.Type
          * to higher bytes size like integer to long. This behavior was changed from OpenSearch 2.7 version not to
@@ -1191,6 +1249,12 @@ public final class IndexSettings {
             this::setDocIdFuzzySetFalsePositiveProbability
         );
         scopedSettings.addSettingsUpdateConsumer(ALLOW_DERIVED_FIELDS, this::setAllowDerivedField);
+        scopedSettings.addSettingsUpdateConsumer(INDEX_MERGED_SEGMENT_PRE_COPY_ENABLED_SETTING, this::setMergedSegmentPreCopyEnabled);
+        scopedSettings.addSettingsUpdateConsumer(INDEX_MERGE_SEGMENT_PRE_COPY_TIMEOUT_SETTING, this::setMergedSegmentPreCopyTimeout);
+        scopedSettings.addSettingsUpdateConsumer(
+            INDEX_MERGE_SEGMENT_PRE_COPY_SIZE_THRESHOLD_SETTING,
+            this::setMergedSegmentPreCopySizeThreshold
+        );
         scopedSettings.addSettingsUpdateConsumer(IndexMetadata.INDEX_REMOTE_STORE_ENABLED_SETTING, this::setRemoteStoreEnabled);
         scopedSettings.addSettingsUpdateConsumer(
             IndexMetadata.INDEX_REMOTE_SEGMENT_STORE_REPOSITORY_SETTING,
@@ -1338,6 +1402,18 @@ public final class IndexSettings {
 
     public boolean isSegRepLocalEnabled() {
         return ReplicationType.SEGMENT.equals(replicationType) && !isRemoteStoreEnabled();
+    }
+
+    public boolean isMergedSegmentPreCopyEnable() {
+        return isMergedSegmentPreCopyEnable;
+    }
+
+    public TimeValue getMergeSegmentPreCopyTimeout() {
+        return mergeSegmentPreCopyTimeout;
+    }
+
+    public ByteSizeValue getMergeSegmentPreCopySizeThreshold() {
+        return mergeSegmentPreCopySizeThreshold;
     }
 
     /**
@@ -2021,6 +2097,18 @@ public final class IndexSettings {
 
     public boolean isTranslogMetadataEnabled() {
         return isTranslogMetadataEnabled;
+    }
+
+    public void setMergedSegmentPreCopyEnabled(boolean isMergedSegmentPreCopyEnable) {
+        this.isMergedSegmentPreCopyEnable = isMergedSegmentPreCopyEnable;
+    }
+
+    public void setMergedSegmentPreCopyTimeout(TimeValue timeout) {
+        this.mergeSegmentPreCopyTimeout = timeout;
+    }
+
+    public void setMergedSegmentPreCopySizeThreshold(ByteSizeValue byteSizeValue) {
+        this.mergeSegmentPreCopySizeThreshold = byteSizeValue;
     }
 
     public void setRemoteStoreEnabled(boolean isRemoteStoreEnabled) {

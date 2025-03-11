@@ -28,6 +28,7 @@ import org.opensearch.indices.replication.common.ReplicationListener;
 import org.opensearch.threadpool.ThreadPool;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,13 +43,16 @@ public class SegmentReplicator {
     private static final Logger logger = LogManager.getLogger(SegmentReplicator.class);
 
     private final ReplicationCollection<SegmentReplicationTarget> onGoingReplications;
+    private final ReplicationCollection<MergedSegmentReplicationTarget> onGoingMergedSegmentReplications;
     private final Map<ShardId, SegmentReplicationState> completedReplications = ConcurrentCollections.newConcurrentMap();
+    private final Map<ShardId, SegmentReplicationState> completedMergedReplications = ConcurrentCollections.newConcurrentMap();
     private final ThreadPool threadPool;
 
     private final SetOnce<SegmentReplicationSourceFactory> sourceFactory;
 
     public SegmentReplicator(ThreadPool threadPool) {
         this.onGoingReplications = new ReplicationCollection<>(logger, threadPool);
+        this.onGoingMergedSegmentReplications = new ReplicationCollection<>(logger, threadPool);
         this.threadPool = threadPool;
         this.sourceFactory = new SetOnce<>();
     }
@@ -102,15 +106,41 @@ public class SegmentReplicator {
         return target;
     }
 
+    SegmentReplicationTarget startMergedSegmentReplication(
+        final String preCopyUUID,
+        final IndexShard indexShard,
+        final ReplicationCheckpoint checkpoint,
+        final SegmentReplicationSource source,
+        final SegmentReplicationTargetService.SegmentReplicationListener listener
+    ) {
+        final MergedSegmentReplicationTarget target = new MergedSegmentReplicationTarget(
+            preCopyUUID,
+            indexShard,
+            checkpoint,
+            source,
+            listener
+        );
+        startMergedSegmentReplication(target, indexShard.getRecoverySettings().activityTimeout());
+        return target;
+    }
+
     /**
      * Runnable implementation to trigger a replication event.
      */
-    private class ReplicationRunner extends AbstractRunnable {
+    private class ReplicationRunner<R extends SegmentReplicationTarget> extends AbstractRunnable {
 
         final long replicationId;
+        final ReplicationCollection<R> onGoingReplications;
+        final Map<ShardId, SegmentReplicationState> completedReplications;
 
-        public ReplicationRunner(long replicationId) {
+        public ReplicationRunner(
+            long replicationId,
+            ReplicationCollection<R> onGoingReplications,
+            Map<ShardId, SegmentReplicationState> completedReplications
+        ) {
             this.replicationId = replicationId;
+            this.onGoingReplications = onGoingReplications;
+            this.completedReplications = completedReplications;
         }
 
         @Override
@@ -122,38 +152,42 @@ public class SegmentReplicator {
         public void doRun() {
             start(replicationId);
         }
-    }
 
-    private void start(final long replicationId) {
-        final SegmentReplicationTarget target;
-        try (ReplicationCollection.ReplicationRef<SegmentReplicationTarget> replicationRef = onGoingReplications.get(replicationId)) {
-            // This check is for handling edge cases where the reference is removed before the ReplicationRunner is started by the
-            // threadpool.
-            if (replicationRef == null) {
-                return;
-            }
-            target = replicationRef.get();
-        }
-        target.startReplication(new ActionListener<>() {
-            @Override
-            public void onResponse(Void o) {
-                logger.debug(() -> new ParameterizedMessage("Finished replicating {} marking as done.", target.description()));
-                onGoingReplications.markAsDone(replicationId);
-                if (target.state().getIndex().recoveredFileCount() != 0 && target.state().getIndex().recoveredBytes() != 0) {
-                    completedReplications.put(target.shardId(), target.state());
-                }
-            }
-
-            @Override
-            public void onFailure(Exception e) {
-                logger.debug("Replication failed {}", target.description());
-                if (isStoreCorrupt(target) || e instanceof CorruptIndexException || e instanceof OpenSearchCorruptionException) {
-                    onGoingReplications.fail(replicationId, new ReplicationFailedException("Store corruption during replication", e), true);
+        private void start(final long replicationId) {
+            final SegmentReplicationTarget target;
+            try (ReplicationCollection.ReplicationRef<R> replicationRef = onGoingReplications.get(replicationId)) {
+                // This check is for handling edge cases where the reference is removed before the ReplicationRunner is started by the
+                // threadpool.
+                if (replicationRef == null) {
                     return;
                 }
-                onGoingReplications.fail(replicationId, new ReplicationFailedException("Segment Replication failed", e), false);
+                target = replicationRef.get();
             }
-        });
+            target.startReplication(new ActionListener<>() {
+                @Override
+                public void onResponse(Void o) {
+                    logger.debug(() -> new ParameterizedMessage("Finished replicating {} marking as done.", target.description()));
+                    onGoingReplications.markAsDone(replicationId);
+                    if (target.state().getIndex().recoveredFileCount() != 0 && target.state().getIndex().recoveredBytes() != 0) {
+                        completedReplications.put(target.shardId(), target.state());
+                    }
+                }
+
+                @Override
+                public void onFailure(Exception e) {
+                    logger.debug("Replication failed {}", target.description());
+                    if (isStoreCorrupt(target) || e instanceof CorruptIndexException || e instanceof OpenSearchCorruptionException) {
+                        onGoingReplications.fail(
+                            replicationId,
+                            new ReplicationFailedException("Store corruption during replication", e),
+                            true
+                        );
+                        return;
+                    }
+                    onGoingReplications.fail(replicationId, new ReplicationFailedException("Segment Replication failed", e), false);
+                }
+            });
+        }
     }
 
     // pkg-private for integration tests
@@ -167,7 +201,20 @@ public class SegmentReplicator {
             return;
         }
         logger.trace(() -> new ParameterizedMessage("Added new replication to collection {}", target.description()));
-        threadPool.generic().execute(new ReplicationRunner(replicationId));
+        threadPool.generic().execute(new ReplicationRunner(replicationId, onGoingReplications, completedReplications));
+    }
+
+    void startMergedSegmentReplication(final MergedSegmentReplicationTarget target, TimeValue timeout) {
+        final long replicationId;
+        try {
+            replicationId = onGoingMergedSegmentReplications.start(target, timeout);
+        } catch (ReplicationFailedException e) {
+            // replication already running for shard.
+            target.fail(e, false);
+            return;
+        }
+        logger.trace(() -> new ParameterizedMessage("Added new replication to collection {}", target.description()));
+        threadPool.generic().execute(new ReplicationRunner(replicationId, onGoingMergedSegmentReplications, completedMergedReplications));
     }
 
     private boolean isStoreCorrupt(SegmentReplicationTarget target) {
@@ -197,10 +244,15 @@ public class SegmentReplicator {
 
     void cancel(ShardId shardId, String reason) {
         onGoingReplications.cancelForShard(shardId, reason);
+        onGoingMergedSegmentReplications.cancelForShard(shardId, reason);
     }
 
     SegmentReplicationTarget get(ShardId shardId) {
         return onGoingReplications.getOngoingReplicationTarget(shardId);
+    }
+
+    List<MergedSegmentReplicationTarget> getMergedSegmentReplicationTarget(ShardId shardId) {
+        return onGoingMergedSegmentReplications.getOngoingReplicationTargetList(shardId);
     }
 
     ReplicationCollection.ReplicationRef<SegmentReplicationTarget> get(long id) {
@@ -213,5 +265,9 @@ public class SegmentReplicator {
 
     ReplicationCollection.ReplicationRef<SegmentReplicationTarget> get(long id, ShardId shardId) {
         return onGoingReplications.getSafe(id, shardId);
+    }
+
+    ReplicationCollection.ReplicationRef<MergedSegmentReplicationTarget> getMergeReplicationRef(long id, ShardId shardId) {
+        return onGoingMergedSegmentReplications.getSafe(id, shardId);
     }
 }

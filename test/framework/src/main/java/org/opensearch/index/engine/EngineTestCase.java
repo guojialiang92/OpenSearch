@@ -696,7 +696,13 @@ public abstract class EngineTestCase extends OpenSearchTestCase {
     }
 
     public static InternalEngine createEngine(EngineConfig engineConfig, int maxDocs) {
-        return new InternalEngine(engineConfig, maxDocs, LocalCheckpointTracker::new, TranslogEventListener.NOOP_TRANSLOG_EVENT_LISTENER);
+        return new InternalEngine(
+            engineConfig,
+            maxDocs,
+            LocalCheckpointTracker::new,
+            TranslogEventListener.NOOP_TRANSLOG_EVENT_LISTENER,
+            null
+        );
     }
 
     @FunctionalInterface

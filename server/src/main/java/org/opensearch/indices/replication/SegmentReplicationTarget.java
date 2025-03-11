@@ -38,6 +38,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -48,9 +49,9 @@ import java.util.stream.Collectors;
  */
 public class SegmentReplicationTarget extends ReplicationTarget {
 
-    private final ReplicationCheckpoint checkpoint;
-    private final SegmentReplicationSource source;
-    private final SegmentReplicationState state;
+    protected final ReplicationCheckpoint checkpoint;
+    protected final SegmentReplicationSource source;
+    protected final SegmentReplicationState state;
     protected final MultiFileWriter multiFileWriter;
 
     public final static String REPLICATION_PREFIX = "replication.";
@@ -177,7 +178,7 @@ public class SegmentReplicationTarget extends ReplicationTarget {
         source.getCheckpointMetadata(getId(), checkpoint, checkpointInfoListener);
 
         checkpointInfoListener.whenComplete(checkpointInfo -> {
-            final List<StoreFileMetadata> filesToFetch = getFiles(checkpointInfo);
+            final List<StoreFileMetadata> filesToFetch = getFiles(checkpointInfo.getMetadataMap(), checkpointInfo.getCheckpoint());
             state.setStage(SegmentReplicationState.Stage.GET_FILES);
             cancellableThreads.checkForCancel();
             source.getSegmentFiles(
@@ -196,10 +197,11 @@ public class SegmentReplicationTarget extends ReplicationTarget {
         }, listener::onFailure);
     }
 
-    private List<StoreFileMetadata> getFiles(CheckpointInfoResponse checkpointInfo) throws IOException {
+    protected List<StoreFileMetadata> getFiles(Map<String, StoreFileMetadata> metadataMap, ReplicationCheckpoint replicationCheckpoint)
+        throws IOException {
         cancellableThreads.checkForCancel();
         state.setStage(SegmentReplicationState.Stage.FILE_DIFF);
-        final Store.RecoveryDiff diff = Store.segmentReplicationDiff(checkpointInfo.getMetadataMap(), indexShard.getSegmentMetadataMap());
+        final Store.RecoveryDiff diff = Store.segmentReplicationDiff(metadataMap, indexShard.getSegmentMetadataMap());
         // local files
         final Set<String> localFiles = Set.of(indexShard.store().directory().listAll());
         // set of local files that can be reused
@@ -214,12 +216,7 @@ public class SegmentReplicationTarget extends ReplicationTarget {
             .collect(Collectors.toList());
 
         logger.trace(
-            () -> new ParameterizedMessage(
-                "Replication diff for checkpoint {} {} {}",
-                checkpointInfo.getCheckpoint(),
-                missingFiles,
-                diff.different
-            )
+            () -> new ParameterizedMessage("Replication diff for checkpoint {} {} {}", replicationCheckpoint, missingFiles, diff.different)
         );
         /*
          * Segments are immutable. So if the replica has any segments with the same name that differ from the one in the incoming
@@ -243,7 +240,7 @@ public class SegmentReplicationTarget extends ReplicationTarget {
     }
 
     // pkg private for tests
-    private boolean validateLocalChecksum(StoreFileMetadata file) {
+    protected boolean validateLocalChecksum(StoreFileMetadata file) {
         try (IndexInput indexInput = indexShard.store().directory().openInput(file.name(), IOContext.READONCE)) {
             String checksum = Store.digestToString(CodecUtil.retrieveChecksum(indexInput));
             if (file.checksum().equals(checksum)) {
@@ -272,7 +269,7 @@ public class SegmentReplicationTarget extends ReplicationTarget {
      * @param fileName Name of the file being downloaded
      * @param bytesRecovered Number of bytes recovered
      */
-    private void updateFileRecoveryBytes(String fileName, long bytesRecovered) {
+    protected void updateFileRecoveryBytes(String fileName, long bytesRecovered) {
         ReplicationLuceneIndex index = state.getIndex();
         if (index != null) {
             index.addRecoveredBytesToFile(fileName, bytesRecovered);

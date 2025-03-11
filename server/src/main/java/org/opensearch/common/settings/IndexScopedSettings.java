@@ -222,6 +222,9 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
                 LogByteSizeMergePolicyProvider.INDEX_LBS_MAX_MERGED_DOCS_SETTING,
                 LogByteSizeMergePolicyProvider.INDEX_LBS_NO_CFS_RATIO_SETTING,
                 IndexSettings.DEFAULT_SEARCH_PIPELINE,
+                IndexSettings.INDEX_MERGED_SEGMENT_PRE_COPY_ENABLED_SETTING,
+                IndexSettings.INDEX_MERGE_SEGMENT_PRE_COPY_TIMEOUT_SETTING,
+                IndexSettings.INDEX_MERGE_SEGMENT_PRE_COPY_SIZE_THRESHOLD_SETTING,
 
                 // Settings for Searchable Snapshots
                 IndexSettings.SEARCHABLE_SNAPSHOT_REPOSITORY,

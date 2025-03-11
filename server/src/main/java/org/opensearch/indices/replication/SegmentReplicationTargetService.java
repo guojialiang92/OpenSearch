@@ -26,9 +26,12 @@ import org.opensearch.common.util.concurrent.ConcurrentCollections;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.core.transport.TransportResponse;
+import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.index.IndexService;
 import org.opensearch.index.shard.IndexEventListener;
 import org.opensearch.index.shard.IndexShard;
+import org.opensearch.index.shard.IndexShardClosedException;
+import org.opensearch.index.shard.IndexShardNotStartedException;
 import org.opensearch.index.shard.IndexShardState;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.indices.recovery.FileChunkRequest;
@@ -49,6 +52,7 @@ import org.opensearch.transport.TransportRequestOptions;
 import org.opensearch.transport.TransportService;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
@@ -85,6 +89,8 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
     public static class Actions {
         public static final String FILE_CHUNK = "internal:index/shard/replication/file_chunk";
         public static final String FORCE_SYNC = "internal:index/shard/replication/segments_sync";
+        public static final String PUBLISH_MERGE_FILES = "internal:index/shard/replication/public_merge_files";
+        public static final String MERGE_FILE_CHUNK = "internal:index/shard/replication/merge_file_chunk";
     }
 
     @Deprecated
@@ -156,6 +162,18 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
             ThreadPool.Names.GENERIC,
             ForceSyncRequest::new,
             new ForceSyncTransportRequestHandler()
+        );
+        transportService.registerRequestHandler(
+            Actions.PUBLISH_MERGE_FILES,
+            ThreadPool.Names.GENERIC,
+            PublishMergedCheckpointRequest::new,
+            new PublishMergeFilesHandler()
+        );
+        transportService.registerRequestHandler(
+            Actions.MERGE_FILE_CHUNK,
+            ThreadPool.Names.GENERIC,
+            FileChunkRequest::new,
+            new MergeFileChunkTransportRequestHandler()
         );
         replicator.setSourceFactory(sourceFactory);
     }
@@ -639,4 +657,158 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
         }
     }
 
+    public class PublishMergeFilesHandler implements TransportRequestHandler<PublishMergedCheckpointRequest> {
+        private static final Logger logger = LogManager.getLogger(PublishMergeFilesHandler.class);
+
+        public PublishMergeFilesHandler() {}
+
+        @Override
+        public void messageReceived(PublishMergedCheckpointRequest request, TransportChannel channel, Task task) throws Exception {
+            ShardId shardId = request.getCheckpoint().getShardId();
+            IndexService indexService = indicesService.indexService(shardId.getIndex());
+            if (indexService == null) {
+                logger.debug("index {} is null, may have been deleted", shardId.getIndexName());
+                channel.sendResponse(new IndexNotFoundException(shardId.getIndexName()));
+                return;
+            }
+            IndexShard indexShard = indexService.getShardOrNull(shardId.id());
+            if (indexShard == null) {
+                logger.debug("index shard is null, may have been closed or deleted, shard[{}]", shardId);
+                channel.sendResponse(new IndexShardClosedException(shardId));
+                return;
+            }
+
+            onNewMergedCheckpoint(request.getPreCopyUUID(), request.getCheckpoint(), indexShard, channel);
+        }
+    }
+
+    public synchronized void onNewMergedCheckpoint(
+        String preCopyUUID,
+        final ReplicationCheckpoint receivedCheckpoint,
+        final IndexShard replicaShard,
+        TransportChannel channel
+    ) throws Exception {
+        logger.debug(() -> new ParameterizedMessage("Replica received new replication checkpoint from primary [{}]", receivedCheckpoint));
+        // if the shard is in any state
+        if (replicaShard.state().equals(IndexShardState.CLOSED)) {
+            // ignore if shard is closed
+            logger.trace(() -> "Ignoring checkpoint, Shard is closed");
+            channel.sendResponse(new IndexShardClosedException(replicaShard.shardId()));
+            return;
+        }
+        if (replicaShard.state().equals(IndexShardState.STARTED) == true) {
+            // Checks if received checkpoint is already present and ahead then it replaces old received checkpoint
+            List<MergedSegmentReplicationTarget> ongoingReplicationTargetList = replicator.getMergedSegmentReplicationTarget(
+                replicaShard.shardId()
+            );
+            if (ongoingReplicationTargetList != null) {
+                for (MergedSegmentReplicationTarget ongoingReplicationTarget : ongoingReplicationTargetList) {
+                    if (ongoingReplicationTarget.getCheckpoint().getPrimaryTerm() < receivedCheckpoint.getPrimaryTerm()) {
+                        logger.debug(
+                            () -> new ParameterizedMessage(
+                                "Cancelling ongoing merge replication {} from old primary with primary term {}",
+                                ongoingReplicationTarget.description(),
+                                ongoingReplicationTarget.getCheckpoint().getPrimaryTerm()
+                            )
+                        );
+                        ongoingReplicationTarget.cancel("Cancelling stuck target after new primary");
+                    } else if (ongoingReplicationTarget.getCheckpoint().getPrimaryTerm() > receivedCheckpoint.getPrimaryTerm()) {
+                        logger.debug(
+                            () -> new ParameterizedMessage(
+                                "Ignoring new merge replication checkpoint - request has lower primary term {} than {}",
+                                receivedCheckpoint.getPrimaryTerm(),
+                                ongoingReplicationTarget.getCheckpoint().getPrimaryTerm()
+                            )
+                        );
+                        channel.sendResponse(
+                            new IllegalArgumentException(
+                                String.format(
+                                    "request primary term %d lower than %d",
+                                    receivedCheckpoint.getPrimaryTerm(),
+                                    ongoingReplicationTarget.getCheckpoint().getPrimaryTerm()
+                                )
+                            )
+                        );
+                        return;
+                    } else if (ongoingReplicationTarget.getPreCopyUUID().equals(preCopyUUID)) {
+                        logger.debug(
+                            () -> new ParameterizedMessage(
+                                "Ignoring new merge replication checkpoint - shard is currently replicating to checkpoint {}",
+                                ongoingReplicationTarget.getCheckpoint()
+                            )
+                        );
+                        channel.sendResponse(new IllegalArgumentException(String.format("PreCopyUUID %s already exist", preCopyUUID)));
+                        return;
+                    }
+                }
+            }
+            startMergedSegmentReplication(preCopyUUID, replicaShard, receivedCheckpoint, new SegmentReplicationListener() {
+                @Override
+                public void onReplicationDone(SegmentReplicationState state) {
+                    logger.debug(
+                        () -> new ParameterizedMessage(
+                            "[shardId {}] [replication id {}] Merge Replication complete to {}, timing data: {}",
+                            replicaShard.shardId().getId(),
+                            state.getReplicationId(),
+                            receivedCheckpoint,
+                            state.getTimingData()
+                        )
+                    );
+                    try {
+                        channel.sendResponse(new PublishMergedCheckpointResponse(1, 1, 0));
+                    } catch (Exception e) {
+                        logger.warn("merge pre copy is successful, but fail to send merge pre copy response", e);
+                    }
+                }
+
+                @Override
+                public void onReplicationFailure(SegmentReplicationState state, ReplicationFailedException e, boolean sendShardFailure) {
+                    logReplicationFailure(state, e, replicaShard);
+                    if (sendShardFailure == true) {
+                        failShard(e, replicaShard);
+                    }
+                    try {
+                        channel.sendResponse(e);
+                    } catch (Exception t) {
+                        t.addSuppressed(e);
+                        logger.warn("merge pre copy is failure, fail to send merge pre copy response", t);
+                    }
+                }
+            });
+        } else {
+            logger.trace(
+                () -> new ParameterizedMessage("Ignoring checkpoint, shard not started {} {}", receivedCheckpoint, replicaShard.state())
+            );
+            channel.sendResponse(new IndexShardNotStartedException(replicaShard.shardId(), replicaShard.state()));
+        }
+    }
+
+    public void startMergedSegmentReplication(
+        final String preCopyUUID,
+        final IndexShard indexShard,
+        final ReplicationCheckpoint checkpoint,
+        final SegmentReplicationListener listener
+    ) {
+        replicator.startMergedSegmentReplication(preCopyUUID, indexShard, checkpoint, sourceFactory.get(indexShard), listener);
+    }
+
+    private class MergeFileChunkTransportRequestHandler implements TransportRequestHandler<FileChunkRequest> {
+
+        // How many bytes we've copied since we last called RateLimiter.pause
+        final AtomicLong bytesSinceLastPause = new AtomicLong();
+
+        @Override
+        public void messageReceived(final FileChunkRequest request, TransportChannel channel, Task task) throws Exception {
+            try (
+                ReplicationRef<MergedSegmentReplicationTarget> ref = replicator.getMergeReplicationRef(
+                    request.recoveryId(),
+                    request.shardId()
+                )
+            ) {
+                final MergedSegmentReplicationTarget target = ref.get();
+                final ActionListener<Void> listener = target.createOrFinishListener(channel, Actions.MERGE_FILE_CHUNK, request);
+                target.handleFileChunk(request, target, bytesSinceLastPause, recoverySettings.replicationRateLimiter(), listener);
+            }
+        }
+    }
 }

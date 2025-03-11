@@ -99,6 +99,7 @@ import org.opensearch.common.util.concurrent.BufferedAsyncIOProcessor;
 import org.opensearch.common.util.concurrent.RunOnce;
 import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.common.util.io.IOUtils;
+import org.opensearch.common.util.set.Sets;
 import org.opensearch.core.Assertions;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.common.unit.ByteSizeValue;
@@ -361,6 +362,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      */
     private final ShardMigrationState shardMigrationState;
     private DiscoveryNodes discoveryNodes;
+    private final Set<String> pendingMergeFiles = Sets.newConcurrentHashSet();
 
     public IndexShard(
         final ShardRouting shardRouting,
@@ -1697,6 +1699,17 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     public void finalizeReplication(SegmentInfos infos) throws IOException {
         if (getReplicationEngine().isPresent()) {
             getReplicationEngine().get().updateSegments(infos);
+            Collection<String> files = infos.files(false);
+            pendingMergeFiles.removeAll(files);
+            List<String> toDelete = new ArrayList<>();
+            for (String pendingMergeFile : pendingMergeFiles) {
+                long segmentCounter = Long.parseLong(IndexFileNames.parseSegmentName(pendingMergeFile).substring(1), Character.MAX_RADIX);
+                if (segmentCounter < infos.counter) {
+                    toDelete.add(pendingMergeFile);
+                }
+            }
+            store().deleteQuiet(toDelete.toArray(new String[0]));
+            toDelete.forEach(pendingMergeFiles::remove);
         }
     }
 
@@ -5419,5 +5432,9 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             return shouldSeed ? REMOTE_MIGRATING_UNSEEDED : REMOTE_MIGRATING_SEEDED;
         }
         return ShardMigrationState.DOCREP_NON_MIGRATING;
+    }
+
+    public Set<String> getPendingMergeFiles() {
+        return pendingMergeFiles;
     }
 }

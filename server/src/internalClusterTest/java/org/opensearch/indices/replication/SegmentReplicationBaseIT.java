@@ -21,9 +21,11 @@ import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.core.common.unit.ByteSizeValue;
 import org.opensearch.core.index.Index;
 import org.opensearch.index.IndexModule;
 import org.opensearch.index.IndexService;
+import org.opensearch.index.IndexSettings;
 import org.opensearch.index.SegmentReplicationShardStats;
 import org.opensearch.index.engine.Engine;
 import org.opensearch.index.shard.IndexShard;
@@ -68,6 +70,8 @@ public class SegmentReplicationBaseIT extends OpenSearchIntegTestCase {
     public Settings indexSettings() {
         return Settings.builder()
             .put(super.indexSettings())
+            .put(IndexSettings.INDEX_MERGED_SEGMENT_PRE_COPY_ENABLED_SETTING.getKey(), true)
+            .put(IndexSettings.INDEX_MERGE_SEGMENT_PRE_COPY_SIZE_THRESHOLD_SETTING.getKey(), new ByteSizeValue(0))
             .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, SHARD_COUNT)
             .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, REPLICA_COUNT)
             .put(IndexModule.INDEX_QUERY_CACHE_ENABLED_SETTING.getKey(), false)

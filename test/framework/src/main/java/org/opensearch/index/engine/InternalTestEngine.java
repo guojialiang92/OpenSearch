@@ -56,7 +56,7 @@ class InternalTestEngine extends InternalEngine {
         int maxDocs,
         BiFunction<Long, Long, LocalCheckpointTracker> localCheckpointTrackerSupplier
     ) {
-        super(engineConfig, maxDocs, localCheckpointTrackerSupplier, TranslogEventListener.NOOP_TRANSLOG_EVENT_LISTENER);
+        super(engineConfig, maxDocs, localCheckpointTrackerSupplier, TranslogEventListener.NOOP_TRANSLOG_EVENT_LISTENER, null);
     }
 
     @Override

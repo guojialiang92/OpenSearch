@@ -8,6 +8,8 @@
 
 package org.opensearch.index.engine;
 
+import org.opensearch.transport.client.Client;
+
 /**
  * Engine Factory implementation used with Segment Replication that wires up replica shards with an ${@link NRTReplicationEngine}
  * and primary with an ${@link InternalEngine}
@@ -15,11 +17,19 @@ package org.opensearch.index.engine;
  * @opensearch.internal
  */
 public class NRTReplicationEngineFactory implements EngineFactory {
+    private Client client;
+
+    public NRTReplicationEngineFactory() {}
+
+    public NRTReplicationEngineFactory(Client client) {
+        this.client = client;
+    }
+
     @Override
     public Engine newReadWriteEngine(EngineConfig config) {
         if (config.isReadOnlyReplica()) {
             return new NRTReplicationEngine(config);
         }
-        return new InternalEngine(config);
+        return new InternalEngine(config, client);
     }
 }

@@ -5647,7 +5647,8 @@ public class InternalEngineTests extends EngineTestCase {
                 noopEngineConfig,
                 IndexWriter.MAX_DOCS,
                 supplier,
-                TranslogEventListener.NOOP_TRANSLOG_EVENT_LISTENER
+                TranslogEventListener.NOOP_TRANSLOG_EVENT_LISTENER,
+                null
             ) {
                 @Override
                 protected long doGenerateSeqNoForOperation(Operation operation) {

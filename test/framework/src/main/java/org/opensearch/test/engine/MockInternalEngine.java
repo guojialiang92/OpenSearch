@@ -36,6 +36,7 @@ import org.opensearch.index.engine.Engine;
 import org.opensearch.index.engine.EngineConfig;
 import org.opensearch.index.engine.EngineException;
 import org.opensearch.index.engine.InternalEngine;
+import org.opensearch.transport.client.Client;
 
 import java.io.IOException;
 import java.util.function.Function;
@@ -48,6 +49,11 @@ final class MockInternalEngine extends InternalEngine {
         super(config);
         wrapperClass = wrapper;
 
+    }
+
+    MockInternalEngine(EngineConfig config, Class<? extends FilterDirectoryReader> wrapper, Client client) throws EngineException {
+        super(config, client);
+        wrapperClass = wrapper;
     }
 
     private synchronized MockEngineSupport support() {

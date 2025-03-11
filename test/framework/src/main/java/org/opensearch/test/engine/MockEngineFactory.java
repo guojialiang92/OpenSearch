@@ -36,13 +36,20 @@ import org.opensearch.index.engine.Engine;
 import org.opensearch.index.engine.EngineConfig;
 import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.index.engine.NRTReplicationEngine;
+import org.opensearch.transport.client.Client;
 
 public final class MockEngineFactory implements EngineFactory {
 
     private final Class<? extends FilterDirectoryReader> wrapper;
+    private Client client;
 
     public MockEngineFactory(Class<? extends FilterDirectoryReader> wrapper) {
         this.wrapper = wrapper;
+    }
+
+    public MockEngineFactory(Class<? extends FilterDirectoryReader> wrapper, Client client) {
+        this.wrapper = wrapper;
+        this.client = client;
     }
 
     @Override
@@ -53,6 +60,6 @@ public final class MockEngineFactory implements EngineFactory {
          * will not work and an NRTReplicationEngine must be used instead. The primary shards for these indexes will
          * still use a MockInternalEngine.
          */
-        return config.isReadOnlyReplica() ? new NRTReplicationEngine(config) : new MockInternalEngine(config, wrapper);
+        return config.isReadOnlyReplica() ? new NRTReplicationEngine(config) : new MockInternalEngine(config, wrapper, client);
     }
 }
