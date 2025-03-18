@@ -56,6 +56,7 @@ import org.opensearch.index.codec.CodecSettings;
 import org.opensearch.index.mapper.DocumentMapperForType;
 import org.opensearch.index.mapper.ParsedDocument;
 import org.opensearch.index.seqno.RetentionLeases;
+import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.InternalTranslogFactory;
 import org.opensearch.index.translog.TranslogConfig;
@@ -247,6 +248,7 @@ public final class EngineConfig {
     private final TranslogConfig translogConfig;
 
     private final TranslogFactory translogFactory;
+    private final IndexShard indexShard;
 
     /**
      * Creates a new {@link org.opensearch.index.engine.EngineConfig}
@@ -299,6 +301,7 @@ public final class EngineConfig {
         this.translogFactory = builder.translogFactory;
         this.leafSorter = builder.leafSorter;
         this.documentMapperForTypeSupplier = builder.documentMapperForTypeSupplier;
+        this.indexShard = builder.indexShard;
     }
 
     /**
@@ -523,6 +526,10 @@ public final class EngineConfig {
         return translogFactory;
     }
 
+    public IndexShard getIndexShard() {
+        return indexShard;
+    }
+
     /**
      * A supplier supplies tombstone documents which will be used in soft-update methods.
      * The returned document consists only _uid, _seqno, _term and _version fields; other metadata fields are excluded.
@@ -598,6 +605,7 @@ public final class EngineConfig {
         private TranslogFactory translogFactory = new InternalTranslogFactory();
         private Supplier<DocumentMapperForType> documentMapperForTypeSupplier;
         Comparator<LeafReader> leafSorter;
+        private IndexShard indexShard;
 
         public Builder shardId(ShardId shardId) {
             this.shardId = shardId;
@@ -736,6 +744,11 @@ public final class EngineConfig {
 
         public Builder leafSorter(Comparator<LeafReader> leafSorter) {
             this.leafSorter = leafSorter;
+            return this;
+        }
+
+        public Builder indexShard(IndexShard indexShard) {
+            this.indexShard = indexShard;
             return this;
         }
 

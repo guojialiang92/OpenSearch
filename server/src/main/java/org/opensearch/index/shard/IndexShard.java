@@ -4056,9 +4056,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
           With segment replication enabled for primary relocation, recover replica shard initially as read only and
           change to a writeable engine during relocation handoff after a round of segment replication.
          */
-        boolean isReadOnlyReplica = indexSettings.isSegRepEnabledOrRemoteNode()
-            && (shardRouting.primary() == false
-                || (shardRouting.isRelocationTarget() && recoveryState.getStage() != RecoveryState.Stage.FINALIZE));
+        boolean isReadOnlyReplica = indexSettings.isSegRepEnabledOrRemoteNode() && (shardRouting.primary() == false);
 
         // For mixed mode, when relocating from doc rep to remote node, we use a writeable engine
         if (shouldSeedRemoteStore()) {
@@ -4093,7 +4091,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             translogFactorySupplier.apply(indexSettings, shardRouting),
             isTimeSeriesDescSortOptimizationEnabled() ? DataStream.TIMESERIES_LEAF_SORTER : null, // DESC @timestamp default order for
             // timeseries
-            () -> docMapper()
+            () -> docMapper(),
+            this
         );
     }
 

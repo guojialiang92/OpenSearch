@@ -28,6 +28,7 @@ import org.opensearch.index.codec.CodecServiceFactory;
 import org.opensearch.index.mapper.DocumentMapperForType;
 import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.seqno.RetentionLeases;
+import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.TranslogConfig;
 import org.opensearch.index.translog.TranslogDeletionPolicyFactory;
@@ -156,7 +157,8 @@ public class EngineConfigFactory {
         BooleanSupplier startedPrimarySupplier,
         TranslogFactory translogFactory,
         Comparator<LeafReader> leafSorter,
-        Supplier<DocumentMapperForType> documentMapperForTypeSupplier
+        Supplier<DocumentMapperForType> documentMapperForTypeSupplier,
+        IndexShard indexShard
     ) {
         CodecService codecServiceToUse = codecService;
         if (codecService == null && this.codecServiceFactory != null) {
@@ -191,6 +193,7 @@ public class EngineConfigFactory {
             .translogFactory(translogFactory)
             .leafSorter(leafSorter)
             .documentMapperForTypeSupplier(documentMapperForTypeSupplier)
+            .indexShard(indexShard)
             .build();
     }
 

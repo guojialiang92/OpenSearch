@@ -67,6 +67,8 @@ import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.InfoStream;
 import org.opensearch.ExceptionsHelper;
 import org.opensearch.action.index.IndexRequest;
+import org.opensearch.cluster.routing.RecoverySource;
+import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.common.Booleans;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.SuppressForbidden;
@@ -348,7 +350,82 @@ public class InternalEngine extends Engine {
                 }
             }
         }
+        if (engineConfig.getIndexSettings().isSegRepEnabledOrRemoteNode()) {
+            advanceIndexWriterSegmentCounter();
+        }
         logger.trace("created new InternalEngine");
+    }
+
+    protected void advanceIndexWriterSegmentCounter() {
+        ShardRouting shardRouting = engineConfig.getIndexShard().routingEntry();
+        RecoverySource recoverySource = shardRouting.recoverySource();
+        assert indexWriter != null : "index writer must have created";
+        if (shardRouting.initializing() && recoverySource != null && recoverySource.getType() == RecoverySource.Type.EMPTY_STORE) {
+            // new primary does not need advancing segment counter
+            logger.debug("skip advance segment counter of indexWriter because the primary shard is newly created");
+            return;
+        }
+        final long currentCounter = getLatestSegmentInfos().counter;
+        long newCounter;
+        final long defaultStep = engineConfig.getIndexSettings().getSegmentCounterIncrementStep();
+        assert defaultStep >= 0 : "advance step of index writer must >=0, defaultStep: " + defaultStep;
+        long totalStep;
+        if (shardRouting.initializing() && recoverySource != null && recoverySource.getType() == RecoverySource.Type.PEER) {
+            // relocating primary
+            // result_counter = current_counter + phase2_translog_recovery_ops + 1 + default_step(100,000)
+            int opsStep = 0;
+            int totalOps = engineConfig.getIndexShard().recoveryState().getTranslog().totalOperations();
+            // only relocating primary target shard will consider recovering translog ops
+            // Use translogOps + 1 directly, there is no need to estimate the number of docs in the segment.
+            // There will be very few docs in a single segment when the indexing option (refresh=true) is turned on.
+            if (totalOps > 0) {
+                opsStep = totalOps + 1;
+            }
+            totalStep = opsStep + defaultStep;
+            newCounter = currentCounter + totalStep;
+            logger.info(
+                "advance segment counter of indexWriter because of primary relocating, isPrimary[{}] isActive [{}]"
+                    + " totalOps[{}] opsStep[{}] defaultStep[{}] totalStep[{}] primaryTerm[{}] currentCounter[{}] newCounter[{}]",
+                shardRouting.primary(),
+                shardRouting.active(),
+                totalOps,
+                opsStep,
+                defaultStep,
+                totalStep,
+                engineConfig.getIndexShard().getOperationPrimaryTerm(),
+                currentCounter,
+                newCounter
+            );
+            indexWriter.setSegmentInfosCounter(newCounter);
+        } else {
+            // replica promoting
+            // result_counter = current_counter + default_step(100,000) * primaryTerm
+            totalStep = defaultStep * engineConfig.getIndexShard().getOperationPrimaryTerm();
+            newCounter = currentCounter + totalStep;
+            logger.info(
+                "advance segment counter of indexWriter, isPrimary[{}] isActive [{}] recoverySource[{}] "
+                    + "defaultStep[{}] totalStep [{}] primaryTerm[{}] currentCounter[{}] newCounter[{}]",
+                shardRouting.primary(),
+                shardRouting.active(),
+                recoverySource,
+                defaultStep,
+                totalStep,
+                engineConfig.getIndexShard().getOperationPrimaryTerm(),
+                currentCounter,
+                newCounter
+            );
+            indexWriter.setSegmentInfosCounter(newCounter);
+        }
+        indexWriter.advanceNextDelGen(totalStep);
+        try {
+            final Map<String, String> userData = new HashMap<>();
+            indexWriter.getLiveCommitData().forEach(e -> userData.put(e.getKey(), e.getValue()));
+            indexWriter.setLiveCommitData(userData.entrySet());
+            indexWriter.commit();
+        } catch (IOException e) {
+            maybeFailEngine("start", e);
+            throw new EngineCreationFailureException(shardId, "failed to commit primary segment replication engine", e);
+        }
     }
 
     protected TranslogManager createTranslogManager(
