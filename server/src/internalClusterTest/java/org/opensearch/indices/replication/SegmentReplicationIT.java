@@ -59,9 +59,11 @@ import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.set.Sets;
 import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
+import org.opensearch.core.concurrency.OpenSearchRejectedExecutionException;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.index.IndexModule;
+import org.opensearch.index.IndexSettings;
 import org.opensearch.index.ReplicationStats;
 import org.opensearch.index.SegmentReplicationPerGroupStats;
 import org.opensearch.index.SegmentReplicationPressureService;
@@ -83,6 +85,7 @@ import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.junit.annotations.TestLogging;
 import org.opensearch.test.transport.MockTransportService;
+import org.opensearch.transport.RemoteTransportException;
 import org.opensearch.transport.TransportService;
 import org.opensearch.transport.client.Requests;
 import org.junit.Before;
@@ -98,6 +101,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -129,6 +133,87 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
 
     private static String indexOrAlias() {
         return randomBoolean() ? INDEX_NAME : "alias";
+    }
+
+    /**
+     * run with -Dtests.seed=9F088E121CC77752
+     * In the scenario of replica shard promotion, Store corruption during replication exception appeared
+     */
+    public void testPrimaryStopped_ReplicaPromoted_UpdateDoc() throws Exception {
+        final String primary = internalCluster().startDataOnlyNode();
+        createIndex(INDEX_NAME);
+        ensureYellowAndNoInitializingShards(INDEX_NAME);
+        final String replica = internalCluster().startDataOnlyNode();
+        ensureGreen(INDEX_NAME);
+
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings(INDEX_NAME)
+                .setSettings(
+                    Settings.builder().put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), IndexSettings.MINIMUM_REFRESH_INTERVAL)
+                )
+        );
+
+        for (int i = 0; i < 20; i++) {
+            client().prepareIndex(INDEX_NAME).setId(String.valueOf(i)).setSource("foo" + i, "bar" + i).get();
+        }
+        refresh(INDEX_NAME);
+
+        waitForSearchableDocs(20, primary, replica);
+
+        IndexShard primaryShard = getIndexShard(primary, INDEX_NAME);
+        IndexShard replicaShard = getIndexShard(replica, INDEX_NAME);
+        logger.info("primary shard files: {}", Arrays.stream(primaryShard.store().directory().listAll()).toList());
+        logger.info("replica shard files: {}", Arrays.stream(replicaShard.store().directory().listAll()).toList());
+
+        MockTransportService primaryTransportService = ((MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            primary
+        ));
+        AtomicBoolean mockPrimaryReceiveGetSegmentFilesException = new AtomicBoolean(true);
+        primaryTransportService.addRequestHandlingBehavior(
+            SegmentReplicationSourceService.Actions.GET_SEGMENT_FILES,
+            (handler, request, channel, task) -> {
+                if (mockPrimaryReceiveGetSegmentFilesException.get()) {
+                    logger.info("mock remote transport exception");
+                    throw new RemoteTransportException("mock remote transport exception", new OpenSearchRejectedExecutionException());
+                }
+                logger.info("primary receive get segments request");
+                handler.messageReceived(request, channel, task);
+            }
+        );
+
+        for (int i = 0; i < 2; i++) {
+            client().prepareUpdate(INDEX_NAME, String.valueOf(i)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + i, "kkk" + i).get();
+        }
+        refresh(INDEX_NAME);
+        flush(INDEX_NAME);
+        logger.info("after update primary shard files: {}", Arrays.stream(primaryShard.store().directory().listAll()).toList());
+        logger.info("after update replica shard files: {}", Arrays.stream(replicaShard.store().directory().listAll()).toList());
+
+        for (int i = 3; i < 6; i++) {
+            client().prepareUpdate(INDEX_NAME, String.valueOf(i)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + i, "kkk" + i).get();
+        }
+        refresh(INDEX_NAME);
+        flush(INDEX_NAME);
+        logger.info("after update primary shard files: {}", Arrays.stream(primaryShard.store().directory().listAll()).toList());
+        logger.info("after update replica shard files: {}", Arrays.stream(replicaShard.store().directory().listAll()).toList());
+
+        internalCluster().restartNode(primary);
+        ensureYellow(INDEX_NAME);
+        client().prepareUpdate(INDEX_NAME, String.valueOf(7)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + 7, "kkk" + 7).get();
+        ensureGreen(INDEX_NAME);
+        final IndexShard newPrimaryShard = getIndexShard(replica, INDEX_NAME);
+        final IndexShard newReplicaShard = getIndexShard(primary, INDEX_NAME);
+        assertBusy(() -> {
+            Set<String> newPrimaryFiles = Arrays.stream(newPrimaryShard.store().directory().listAll()).collect(Collectors.toSet());
+            Set<String> newReplicaFiles = Arrays.stream(newPrimaryShard.store().directory().listAll()).collect(Collectors.toSet());
+            Arrays.stream(newReplicaShard.store().directory().listAll()).collect(Collectors.toSet()).removeIf(f -> f.startsWith("segment"));
+            logger.info("after update new primary shard files: {}", newPrimaryFiles);
+            logger.info("after update new replica shard files: {}", newReplicaFiles);
+            assertEquals(newPrimaryFiles.removeIf(f -> f.startsWith("segment")), newReplicaFiles.removeIf(f -> f.startsWith("segment")));
+        }, 1, TimeUnit.MINUTES);
     }
 
     public void testPrimaryStopped_ReplicaPromoted() throws Exception {
