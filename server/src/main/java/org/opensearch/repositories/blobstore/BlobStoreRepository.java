@@ -168,18 +168,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.SoftReference;
 import java.nio.file.NoSuchFileException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -1940,6 +1929,13 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
             Map<String, BlobMetadata> rootBlobs = blobContainer().listBlobs();
             final RepositoryData repositoryData = safeRepositoryData(repositoryStateId, rootBlobs);
             final Map<String, BlobContainer> foundIndices = blobStore().blobContainer(indicesPath()).children();
+            final List<BlobContainer> containerList = blobStore().blobContainer(basePath()).children().values().stream()
+                .filter(b -> (false == b.path().toString().contains(INDICES_DIR)) && (false == b.path().toString().contains(SnapshotShardPaths.DIR))).toList();
+            for (BlobContainer container : containerList) {
+                if (isDanglingContainer(foundIndices.keySet(), container)) {
+                    deleteContainer(container);
+                }
+            }
             final Set<String> survivingIndexIds = repositoryData.getIndices()
                 .values()
                 .stream()
@@ -2199,6 +2195,20 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                 );
             }
         }));
+    }
+
+    private boolean isDanglingContainer(Set<String> indexUUIDs, BlobContainer blobContainer) throws IOException {
+        Queue<BlobContainer> blobContainerQueue = new LinkedList<>();
+        blobContainerQueue.add(blobContainer);
+
+        while (!blobContainerQueue.isEmpty()) {
+            BlobContainer current = blobContainerQueue.poll();
+            if (indexUUIDs.stream().anyMatch(indexUUID -> current.path().toString().contains(indexUUID))) {
+                return false;
+            }
+            blobContainerQueue.addAll(current.children().values());
+        }
+        return true;
     }
 
     private DeleteResult deleteContainer(BlobContainer container) throws IOException {
