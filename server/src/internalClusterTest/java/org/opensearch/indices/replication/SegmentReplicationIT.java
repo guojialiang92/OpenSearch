@@ -53,6 +53,7 @@ import org.opensearch.cluster.routing.Preference;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.allocation.command.CancelAllocationCommand;
+import org.opensearch.cluster.routing.allocation.command.MoveAllocationCommand;
 import org.opensearch.common.action.ActionFuture;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
@@ -134,6 +135,58 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
 
     private static String indexOrAlias() {
         return randomBoolean() ? INDEX_NAME : "alias";
+    }
+
+    public void testPrimaryRelocate() throws Exception {
+        final String primary = internalCluster().startDataOnlyNode();
+        createIndex(INDEX_NAME);
+        ensureYellowAndNoInitializingShards(INDEX_NAME);
+        final String replica = internalCluster().startDataOnlyNode();
+        ensureGreen(INDEX_NAME);
+        final String newNode = internalCluster().startDataOnlyNode();
+
+        CountDownLatch countDownLatch = new CountDownLatch(1);
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 0; i < 20; i++) {
+                    long startTime = System.currentTimeMillis();
+                    logger.info("begin write doc {}", i);
+                    try {
+                        // case1: write request without timeout
+                        // The write thread will be blocked, the index TPS (docs/s) will be affected, but no data will be lost
+                        client().prepareIndex(INDEX_NAME).setId(String.valueOf(i)).setSource("foo" + i, "bar" + i).setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).get();
+
+                        // case2: write request with timeout
+                        // After a long-term of force segment replication, it may have timed out when retrying, resulting in data loss
+//                        client().prepareIndex(INDEX_NAME).setId(String.valueOf(i)).setSource("foo" + i, "bar" + i).setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).setTimeout(TimeValue.timeValueSeconds(5)).get();
+                        logger.info("after write doc {}, cost {}ms", i, System.currentTimeMillis() - startTime);
+                    } catch (Exception e) {
+                        logger.error("write doc " + i + " cost " + (System.currentTimeMillis() - startTime) + "ms generate exception", e);
+                    }
+                    if (i == 10) {
+                        countDownLatch.countDown();
+                    }
+                }
+                refresh(INDEX_NAME);
+            }
+        });
+        thread.start();
+        countDownLatch.await();
+
+        logger.info("primary shard relocate from {} to {}", primary, newNode);
+        client().admin()
+            .cluster()
+            .prepareReroute()
+            .add(new MoveAllocationCommand(INDEX_NAME, 0, primary, newNode))
+            .execute()
+            .actionGet()
+            .getState();
+
+        thread.join();
+        ensureGreen(INDEX_NAME);
+        logger.info("relocation finish, index is green");
+        waitForSearchableDocs(20, newNode, replica);
     }
 
     public void testRetryPublishCheckPoint() throws Exception {

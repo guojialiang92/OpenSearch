@@ -4235,6 +4235,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      */
     private ActionListener<Releasable> wrapPrimaryOperationPermitListener(final ActionListener<Releasable> listener) {
         return ActionListener.delegateFailure(listener, (l, r) -> {
+            logger.info("primary mode is {}", replicationTracker.isPrimaryMode());
             if (replicationTracker.isPrimaryMode()) {
                 l.onResponse(r);
             } else {

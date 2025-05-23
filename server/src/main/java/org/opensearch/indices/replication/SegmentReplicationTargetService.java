@@ -566,6 +566,12 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
         final ShardId shardId = request.getShardId();
         assert indicesService != null;
         final IndexShard indexShard = indicesService.getShardOrNull(shardId);
+        try {
+            logger.info("mock long-term forceReplication");
+            Thread.sleep(20000);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
         // Proceed with round of segment replication only when it is allowed
         if (indexShard == null || indexShard.getReplicationEngine().isEmpty()) {
             listener.onResponse(TransportResponse.Empty.INSTANCE);

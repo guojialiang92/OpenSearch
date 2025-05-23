@@ -1162,7 +1162,7 @@ public abstract class TransportReplicationAction<
                         if (cause instanceof ConnectTransportException
                             || cause instanceof NodeClosedException
                             || (isPrimaryAction && retryPrimaryException(cause))) {
-                            logger.trace(
+                            logger.info(
                                 () -> new ParameterizedMessage(
                                     "received an error from node [{}] for request [{}], scheduling a retry",
                                     node.getId(),
@@ -1184,6 +1184,7 @@ public abstract class TransportReplicationAction<
 
         void retry(Exception failure) {
             assert failure != null;
+            logger.info("request is timeout " + observer.isTimedOut(), failure);
             if (observer.isTimedOut()) {
                 // we running as a last attempt after a timeout has happened. don't retry
                 finishAsFailed(failure);

@@ -1803,6 +1803,7 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
      * Marks a relocation handoff attempt as successful. Moves the tracker into replica mode.
      */
     public synchronized void completeRelocationHandoff() {
+        logger.info("completeRelocationHandoff");
         assert invariant();
         assert primaryMode;
         assert handoffInProgress;

@@ -32,6 +32,8 @@
 
 package org.opensearch.index.shard;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.opensearch.ExceptionsHelper;
 import org.opensearch.action.ActionRunnable;
 import org.opensearch.action.support.ContextPreservingActionListener;
@@ -69,7 +71,7 @@ import java.util.stream.Collectors;
  * @opensearch.internal
  */
 final class IndexShardOperationPermits implements Closeable {
-
+    private static final Logger logger = LogManager.getLogger(IndexShardOperationPermits.class);
     private final ShardId shardId;
     private final ThreadPool threadPool;
 
@@ -205,6 +207,7 @@ final class IndexShardOperationPermits implements Closeable {
                 queuedActions = Collections.emptyList();
             }
         }
+        logger.info("queue action size {}", queuedActions.size());
         if (!queuedActions.isEmpty()) {
             /*
              * Try acquiring permits on fresh thread (for two reasons):
@@ -217,6 +220,7 @@ final class IndexShardOperationPermits implements Closeable {
              */
             threadPool.executor(ThreadPool.Names.GENERIC).execute(() -> {
                 for (DelayedOperation queuedAction : queuedActions) {
+                    logger.info("replay queue action {}", queuedAction.debugInfo);
                     acquire(queuedAction.listener, null, false, queuedAction.debugInfo, queuedAction.stackTrace);
                 }
             });
@@ -269,6 +273,7 @@ final class IndexShardOperationPermits implements Closeable {
         final Releasable releasable;
         try {
             synchronized (this) {
+                logger.info("queuedBlockOperations {}", queuedBlockOperations);
                 if (queuedBlockOperations > 0) {
                     final Supplier<StoredContext> contextSupplier = threadPool.getThreadContext().newRestorableContext(false);
                     final ActionListener<Releasable> wrappedListener;
@@ -296,9 +301,11 @@ final class IndexShardOperationPermits implements Closeable {
                     } else {
                         wrappedListener = new ContextPreservingActionListener<>(contextSupplier, onAcquired);
                     }
+                    logger.info("add {} to delayedOperations", debugInfo);
                     delayedOperations.add(new DelayedOperation(wrappedListener, debugInfo, stackTrace));
                     return;
                 } else {
+                    logger.info("normal process {}", debugInfo);
                     releasable = acquire(debugInfo, stackTrace);
                 }
             }
