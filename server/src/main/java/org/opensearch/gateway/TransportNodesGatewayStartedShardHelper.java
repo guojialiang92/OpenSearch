@@ -54,7 +54,7 @@ public class TransportNodesGatewayStartedShardHelper {
         Settings settings,
         ClusterService clusterService
     ) throws IOException {
-        logger.trace("{} loading local shard state info", shardId);
+        logger.info("{} loading local shard state info", shardId);
         ShardStateMetadata shardStateMetadata = ShardStateMetadata.FORMAT.loadLatestState(
             logger,
             namedXContentRegistry,
@@ -73,7 +73,7 @@ public class TransportNodesGatewayStartedShardHelper {
                     if (metadata != null) {
                         customDataPath = new IndexSettings(metadata, settings).customDataPath();
                     } else {
-                        logger.trace("{} node doesn't have meta data for the requests index", shardId);
+                        logger.info("{} node doesn't have meta data for the requests index", shardId);
                         throw new OpenSearchException(INDEX_NOT_FOUND + " " + shardId.getIndex());
                     }
                 }
@@ -87,7 +87,7 @@ public class TransportNodesGatewayStartedShardHelper {
                     Store.tryOpenIndex(shardPath.resolveIndex(), shardId, nodeEnv::shardLock, logger);
                 } catch (Exception exception) {
                     final ShardPath finalShardPath = shardPath;
-                    logger.trace(
+                    logger.info(
                         () -> new ParameterizedMessage(
                             "{} can't open index for shard [{}] in path [{}]",
                             shardId,

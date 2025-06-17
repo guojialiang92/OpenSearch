@@ -209,6 +209,7 @@ public abstract class AsyncShardFetch<T extends BaseNodeResponse> implements Rel
                 );
             }
 
+            logger.info("fetch data {}, allIgnoreNodesMap {}", fetchData, allIgnoreNodesMap);
             return new FetchResult<>(fetchData, allIgnoreNodesMap);
         }
     }
@@ -222,10 +223,10 @@ public abstract class AsyncShardFetch<T extends BaseNodeResponse> implements Rel
     protected synchronized void processAsyncFetch(List<T> responses, List<FailedNodeException> failures, long fetchingRound) {
         if (closed) {
             // we are closed, no need to process this async fetch at all
-            logger.trace("{} ignoring fetched [{}] results, already closed", reroutingKey, type);
+            logger.info("{} ignoring fetched [{}] results, already closed", reroutingKey, type);
             return;
         }
-        logger.trace("{} processing fetched [{}] results", reroutingKey, type);
+        logger.info("{} processing fetched [{}] results", reroutingKey, type);
 
         if (responses != null) {
             cache.processResponses(responses, fetchingRound);
@@ -257,7 +258,7 @@ public abstract class AsyncShardFetch<T extends BaseNodeResponse> implements Rel
      */
     // visible for testing
     void asyncFetch(final DiscoveryNode[] nodes, long fetchingRound) {
-        logger.trace("{} fetching [{}] from {}", reroutingKey, type, nodes);
+        logger.info("{} fetching [{}] from {}", reroutingKey, type, nodes);
         action.list(shardAttributesMap, nodes, new ActionListener<BaseNodesResponse<T>>() {
             @Override
             public void onResponse(BaseNodesResponse<T> response) {

@@ -8,6 +8,7 @@
 
 package org.opensearch.gateway;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.action.support.nodes.BaseNodeResponse;
 import org.opensearch.action.support.nodes.BaseNodesResponse;
@@ -143,8 +144,10 @@ public abstract class AsyncShardBatchFetch<T extends BaseNodeResponse, V> extend
         @Override
         public void deleteShard(ShardId shardId) {
             if (shardIdToArray.containsKey(shardId)) {
+                logger.info("delete shard {} hash {}", shardId, shardIdToArray.hashCode());
                 Integer shardIdIndex = shardIdToArray.remove(shardId);
                 for (String nodeId : cache.keySet()) {
+                    logger.info("nodeId {} clear shard {}", nodeId, shardId);
                     cache.get(nodeId).clearShard(shardIdIndex);
                 }
             }
@@ -183,10 +186,14 @@ public abstract class AsyncShardBatchFetch<T extends BaseNodeResponse, V> extend
                 ShardId shardId = shardIdEntry.getKey();
                 Integer arrIndex = shardIdEntry.getValue();
                 if (emptyResponses[arrIndex]) {
+                    logger.info("put shardId {} arrayIndex {} empty", shardId, arrIndex);
                     shardData.put(shardId, emptyResponse);
                 } else if (nodeShardEntries[arrIndex] != null) {
+                    logger.info("put shardId {} arrayIndex {} non-empty", shardId, arrIndex);
                     // ignore null responses here
                     shardData.put(shardId, nodeShardEntries[arrIndex]);
+                } else {
+                    logger.info("no element for shardId {} arrayIndex {}", shardId, arrIndex);
                 }
             }
             return shardData;
@@ -204,6 +211,7 @@ public abstract class AsyncShardBatchFetch<T extends BaseNodeResponse, V> extend
          * for a giving node.
          */
         static class NodeEntry<V> extends BaseNodeEntry {
+            private static final Logger logger = LogManager.getLogger(NodeEntry.class);
             private final V[] shardData;
             private final boolean[] emptyShardResponse; // we can not rely on null entries of the shardData array,
             // those null entries means that we need to ignore those entries. Empty responses on the other hand are
@@ -225,8 +233,10 @@ public abstract class AsyncShardBatchFetch<T extends BaseNodeResponse, V> extend
             }
 
             void clearShard(Integer shardIdIndex) {
+                logger.info("before clearShard emptyShardResponse {}, shardIdIndex {}", emptyShardResponse[shardIdIndex], shardIdIndex);
                 this.shardData[shardIdIndex] = null;
                 emptyShardResponse[shardIdIndex] = false;
+                logger.info("after clearShard emptyShardResponse {}, shardIdIndex {}", emptyShardResponse[shardIdIndex], shardIdIndex);
             }
 
             V[] getData() {
@@ -238,15 +248,22 @@ public abstract class AsyncShardBatchFetch<T extends BaseNodeResponse, V> extend
             }
 
             private void fillShardData(Map<ShardId, V> shardDataFromNode, Map<ShardId, Integer> shardIdKey) {
+                logger.info("shardDataFromNode {}, shardIdKey {} hash {}", shardDataFromNode.keySet(), shardIdKey.keySet(), shardIdKey.hashCode());
                 for (Map.Entry<ShardId, V> shardData : shardDataFromNode.entrySet()) {
+                    logger.info("shardData {}, value {}, shardIdKey value {}", shardData.getKey(), shardData.getValue(), shardIdKey.get(shardData.getKey()));
                     if (shardData.getValue() != null) {
                         ShardId shardId = shardData.getKey();
+                        logger.info("shardIdKey {}, value {}", shardData.getKey(), shardIdKey.get(shardId));
                         if (shardIdKey.get(shardId) != null) {// the response might be for shard which is no longer present in cache
                             if (emptyShardResponsePredicate.test(shardData.getValue())) {
+                                logger.info("before fillShardData emptyShardResponse {}, shardIdIndex {}", emptyShardResponse[shardIdKey.get(shardId)], shardIdKey.get(shardId));
                                 this.emptyShardResponse[shardIdKey.get(shardId)] = true;
                                 this.shardData[shardIdKey.get(shardId)] = null;
+                                logger.info("after fillShardData emptyShardResponse {}, shardIdIndex {}", emptyShardResponse[shardIdKey.get(shardId)], shardIdKey.get(shardId));
                             } else {
+                                logger.info("before fillShardData emptyShardResponse {}, shardIdIndex {}", emptyShardResponse[shardIdKey.get(shardId)], shardIdKey.get(shardId));
                                 this.shardData[shardIdKey.get(shardId)] = shardData.getValue();
+                                logger.info("after fillShardData emptyShardResponse {}, shardIdIndex {}", emptyShardResponse[shardIdKey.get(shardId)], shardIdKey.get(shardId));
                             }
                         }
                     }

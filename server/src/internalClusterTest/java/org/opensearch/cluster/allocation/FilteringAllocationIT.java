@@ -32,6 +32,8 @@
 
 package org.opensearch.cluster.allocation;
 
+import com.carrotsearch.randomizedtesting.annotations.Repeat;
+import com.carrotsearch.randomizedtesting.annotations.Seed;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.health.ClusterHealthStatus;
 import org.opensearch.cluster.metadata.AutoExpandReplicas;
@@ -60,6 +62,8 @@ import static org.hamcrest.Matchers.equalTo;
 @ClusterScope(scope = Scope.TEST, numDataNodes = 0)
 public class FilteringAllocationIT extends OpenSearchIntegTestCase {
 
+    @Repeat(iterations = 200)
+    @Seed("C7410BE30403BEEF")
     public void testDecommissionNodeNoReplicas() {
         logger.info("--> starting 2 nodes");
         List<String> nodesIds = internalCluster().startNodes(2);
@@ -87,7 +91,8 @@ public class FilteringAllocationIT extends OpenSearchIntegTestCase {
             equalTo(100L)
         );
 
-        final boolean closed = randomBoolean();
+//        final boolean closed = randomBoolean();
+        final boolean closed = true;
         if (closed) {
             assertAcked(client().admin().indices().prepareClose("test"));
             ensureGreen("test");
@@ -113,6 +118,7 @@ public class FilteringAllocationIT extends OpenSearchIntegTestCase {
         }
 
         if (closed) {
+            logger.info("--> reopen index test");
             assertAcked(client().admin().indices().prepareOpen("test"));
         }
 

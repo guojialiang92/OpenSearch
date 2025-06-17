@@ -8,6 +8,7 @@
 
 package org.opensearch.gateway;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.RoutingNodes;
@@ -47,6 +48,7 @@ import java.util.Set;
  * @opensearch.internal
  */
 public abstract class PrimaryShardBatchAllocator extends PrimaryShardAllocator {
+    private static final Logger logger = LogManager.getLogger(PrimaryShardBatchAllocator.class);
 
     abstract protected FetchResult<NodeGatewayStartedShardsBatch> fetchData(
         List<ShardRouting> eligibleShards,
@@ -148,15 +150,19 @@ public abstract class PrimaryShardBatchAllocator extends PrimaryShardAllocator {
         // build data for a shard from all the nodes
         nodeResponses.forEach((node, nodeGatewayStartedShardsBatch) -> {
             GatewayStartedShard shardData = nodeGatewayStartedShardsBatch.getNodeGatewayStartedShardsBatch().get(unassignedShard.shardId());
-            nodeShardStates.add(
-                new NodeGatewayStartedShard(
-                    shardData.allocationId(),
-                    shardData.primary(),
-                    shardData.replicationCheckpoint(),
-                    shardData.storeException(),
-                    node
-                )
-            );
+            Map<ShardId, GatewayStartedShard> map = nodeGatewayStartedShardsBatch.getNodeGatewayStartedShardsBatch();
+            logger.info("node {} response size {}, map key {}, unassignedShard {}", node, map.size(), map.keySet(), unassignedShard.shardId());
+//            if (null != shardData) {
+                nodeShardStates.add(
+                    new NodeGatewayStartedShard(
+                        shardData.allocationId(),
+                        shardData.primary(),
+                        shardData.replicationCheckpoint(),
+                        shardData.storeException(),
+                        node
+                    )
+                );
+//            }
         });
         return nodeShardStates;
     }

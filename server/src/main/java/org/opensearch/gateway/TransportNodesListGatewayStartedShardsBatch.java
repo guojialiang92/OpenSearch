@@ -155,6 +155,7 @@ public class TransportNodesListGatewayStartedShardsBatch extends TransportNodesA
                     )
                 );
             } catch (Exception e) {
+                logger.warn("generate exception when get shard info", e);
                 // should return null in case of known exceptions being returned from getShardInfoOnLocalNode method.
                 if (e instanceof IllegalStateException || e.getMessage().contains(INDEX_NOT_FOUND) || e instanceof IOException) {
                     shardsOnNode.put(shardId, null);
@@ -164,6 +165,7 @@ public class TransportNodesListGatewayStartedShardsBatch extends TransportNodesA
                 }
             }
         }
+        logger.info("response shardsOnNode {} {} {}", shardsOnNode.size(), shardsOnNode.keySet(), shardsOnNode.values());
         return new NodeGatewayStartedShardsBatch(clusterService.localNode(), shardsOnNode);
     }
 

@@ -156,6 +156,9 @@ public abstract class AsyncShardFetchCache<K extends BaseNodeResponse> {
                 } else {
                     K nodeResponse = getData(node);
                     if (nodeResponse != null) {
+                        if (nodeResponse instanceof TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch) {
+                            logger.info("node {} NodeGatewayStartedShardsBatch {}", node, ((TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch) nodeResponse).getNodeGatewayStartedShardsBatch());
+                        }
                         fetchData.put(node, nodeResponse);
                     }
                 }
@@ -171,7 +174,7 @@ public abstract class AsyncShardFetchCache<K extends BaseNodeResponse> {
             if (nodeEntry != null) {
                 if (validateNodeResponse(nodeEntry, fetchingRound)) {
                     // if the entry is there, for the right fetching round and not marked as failed already, process it
-                    logger.trace("marking {} as done for [{}], result is [{}]", nodeEntry.getNodeId(), type, response);
+                    logger.info("node [{}] marking {} as done for [{}], result is [{}] [{}]", response.getNode(), nodeEntry.getNodeId(), type, ((TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch)response).getNodeGatewayStartedShardsBatch().size(), ((TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch)response).getNodeGatewayStartedShardsBatch().keySet());
                     putData(response.getNode(), response);
                 }
             }
@@ -228,7 +231,7 @@ public abstract class AsyncShardFetchCache<K extends BaseNodeResponse> {
     void processFailures(List<FailedNodeException> failures, long fetchingRound) {
         clusterManagerMetrics.incrementCounter(clusterManagerMetrics.asyncFetchFailureCounter, Double.valueOf(failures.size()));
         for (FailedNodeException failure : failures) {
-            logger.trace("processing failure {} for [{}]", failure, type);
+            logger.info("processing failure {} for [{}]", failure, type);
             BaseNodeEntry nodeEntry = getCache().get(failure.nodeId());
             if (nodeEntry != null) {
                 handleNodeFailure(nodeEntry, failure, fetchingRound);

@@ -384,6 +384,7 @@ public abstract class MetadataStateFormat<T> {
                         if (matcher.matches()) {
                             final long id = Long.parseLong(matcher.group(1));
                             maxId = Math.max(maxId, id);
+                            logger.info("findMaxGenerationId resolve {} file {} id {}", resolve, stateFile, maxId);
                         }
                     }
                 }
@@ -402,8 +403,10 @@ public abstract class MetadataStateFormat<T> {
         for (Path dataLocation : locations) {
             final Path stateFilePath = dataLocation.resolve(STATE_DIR_NAME).resolve(fileName);
             if (Files.exists(stateFilePath)) {
-                logger.trace("found state file: {}", stateFilePath);
+                logger.info("found state file: {}", stateFilePath);
                 files.add(stateFilePath);
+            } else {
+                logger.info("can not found state file: {}", stateFilePath);
             }
         }
 
@@ -425,16 +428,17 @@ public abstract class MetadataStateFormat<T> {
      */
     public T loadGeneration(Logger logger, NamedXContentRegistry namedXContentRegistry, long generation, Path... dataLocations) {
         List<Path> stateFiles = findStateFilesByGeneration(generation, dataLocations);
+        logger.info("load state files {}, dataLocations {}", stateFiles, dataLocations);
 
         final List<Throwable> exceptions = new ArrayList<>();
         for (Path stateFile : stateFiles) {
             try {
                 T state = read(namedXContentRegistry, stateFile);
-                logger.trace("generation id [{}] read from [{}]", generation, stateFile.getFileName());
+                logger.info("generation id [{}] read from [{}]", generation, stateFile.getFileName());
                 return state;
             } catch (Exception e) {
                 exceptions.add(new IOException("failed to read " + stateFile, e));
-                logger.debug(() -> new ParameterizedMessage("{}: failed to read [{}], ignoring...", stateFile, prefix), e);
+                logger.info(() -> new ParameterizedMessage("{}: failed to read [{}], ignoring...", stateFile, prefix), e);
             }
         }
         // if we reach this something went wrong
