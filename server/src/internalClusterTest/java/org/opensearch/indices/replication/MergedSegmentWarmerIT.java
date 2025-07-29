@@ -15,18 +15,22 @@ import org.opensearch.action.admin.indices.segments.IndexShardSegments;
 import org.opensearch.action.admin.indices.segments.IndicesSegmentResponse;
 import org.opensearch.action.admin.indices.segments.ShardSegments;
 import org.opensearch.action.support.WriteRequest;
+import org.opensearch.action.support.replication.TransportReplicationAction;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.common.util.set.Sets;
+import org.opensearch.core.concurrency.OpenSearchRejectedExecutionException;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.TieredMergePolicyProvider;
 import org.opensearch.index.engine.Segment;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.StoreFileMetadata;
+import org.opensearch.indices.replication.checkpoint.PublishCheckpointAction;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.transport.MockTransportService;
 import org.opensearch.transport.ConnectTransportException;
+import org.opensearch.transport.RemoteTransportException;
 import org.opensearch.transport.TransportService;
 
 import java.util.Set;
@@ -260,6 +264,109 @@ public class MergedSegmentWarmerIT extends SegmentReplicationIT {
             assertEquals(0, replicaShard.getPendingMergedSegmentCheckpoints().size());
             // Verify that primary shard and replica shard have the same file list
             assertEquals(primaryFiles, replicaFiles);
+        }, 1, TimeUnit.MINUTES);
+    }
+
+    public void testPendingMergeSegmentReferenceBySegmentReplication() throws Exception {
+        final String primary = internalCluster().startDataOnlyNode();
+        final String replica = internalCluster().startDataOnlyNode();
+        createIndex(INDEX_NAME);
+        ensureGreen(INDEX_NAME);
+
+        client().prepareIndex(INDEX_NAME).setId("1").setSource("foo", "bar").setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).get();
+        client().prepareIndex(INDEX_NAME).setId("2").setSource("bar", "baz").setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).get();
+        waitForSearchableDocs(2, primary, replica);
+
+        MockTransportService replicaTransportService = ((MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            replica
+        ));
+        AtomicBoolean mockReplicaReceivePublishCheckpointException = new AtomicBoolean(true);
+        replicaTransportService.addRequestHandlingBehavior(
+            PublishCheckpointAction.ACTION_NAME + TransportReplicationAction.REPLICA_ACTION_SUFFIX,
+            (handler, request, channel, task) -> {
+                if (mockReplicaReceivePublishCheckpointException.get()) {
+                    logger.info("mock remote transport exception");
+                    throw new RemoteTransportException("mock remote transport exception", new OpenSearchRejectedExecutionException());
+                }
+                logger.info("replica receive publish checkpoint request");
+                handler.messageReceived(request, channel, task);
+            }
+        );
+
+        client().admin()
+            .cluster()
+            .prepareUpdateSettings()
+            .setTransientSettings(
+                Settings.builder().put(PublishCheckpointAction.PUBLISH_CHECK_POINT_RETRY_TIMEOUT.getKey(), TimeValue.timeValueSeconds(0))
+            )
+            .get();
+
+        client().admin().indices().forceMerge(new ForceMergeRequest(INDEX_NAME).maxNumSegments(1)).get();
+        refresh(INDEX_NAME);
+
+        client().admin()
+            .cluster()
+            .prepareUpdateSettings()
+            .setTransientSettings(
+                Settings.builder().put(PublishCheckpointAction.PUBLISH_CHECK_POINT_RETRY_TIMEOUT.getKey(), TimeValue.timeValueSeconds(60))
+            )
+            .get();
+        mockReplicaReceivePublishCheckpointException.set(false);
+
+        AtomicBoolean mockPrimarySendFileException = new AtomicBoolean(true);
+
+        MockTransportService primaryTransportService = ((MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            primary
+        ));
+
+        primaryTransportService.addSendBehavior(
+            internalCluster().getInstance(TransportService.class, replica),
+            (connection, requestId, action, request, options) -> {
+                if (action.equals(SegmentReplicationTargetService.Actions.FILE_CHUNK)) {
+                    if (mockPrimarySendFileException.get()) {
+                        logger.info("mock connection exception");
+                        throw new ConnectTransportException(connection.getNode(), "mock connection exception");
+                    }
+                    logger.info("primary send action {}", action);
+                }
+                connection.sendRequest(requestId, action, request, options);
+            }
+        );
+
+        client().prepareIndex(INDEX_NAME).setId("3").setSource("acw", "few").setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).get();
+
+        IndexShard replicaShard = getIndexShard(replica, INDEX_NAME);
+
+        assertBusy(() -> {
+            assertNotNull(replicaShard.getCurrentSegmentReplicationCheckpoint());
+            assertFalse(replicaShard.getPendingMergedSegmentCheckpoints().isEmpty());
+            logger.info(
+                "current sr {}, pending merge {}",
+                replicaShard.getCurrentSegmentReplicationCheckpoint(),
+                replicaShard.getPendingMergedSegmentCheckPoints()
+            );
+        }, 1, TimeUnit.MINUTES);
+
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings(INDEX_NAME)
+                .setSettings(
+                    Settings.builder()
+                        .put(IndexSettings.INDEX_CLEAN_PRE_COPY_MERGED_SEGMENT_INTERVAL_SETTING.getKey(), TimeValue.timeValueSeconds(1))
+                        .put(IndexSettings.INDEX_MERGE_SEGMENT_PRE_COPY_TIMEOUT_SETTING.getKey(), TimeValue.timeValueSeconds(1))
+                )
+        );
+        Thread.sleep(3000);
+        mockPrimarySendFileException.set(false);
+
+        waitForSearchableDocs(3, primary, replica);
+
+        assertBusy(() -> {
+            assertNull(replicaShard.getCurrentSegmentReplicationCheckpoint());
+            assertEquals(0, replicaShard.getPendingMergedSegmentCheckPoints().size());
         }, 1, TimeUnit.MINUTES);
     }
 
