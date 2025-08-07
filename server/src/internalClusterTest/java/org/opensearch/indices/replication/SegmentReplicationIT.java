@@ -10,6 +10,7 @@ package org.opensearch.indices.replication;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 
+import com.carrotsearch.randomizedtesting.annotations.Repeat;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.SortedDocValuesField;
@@ -31,6 +32,7 @@ import org.opensearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.opensearch.action.get.GetResponse;
 import org.opensearch.action.get.MultiGetRequest;
 import org.opensearch.action.get.MultiGetResponse;
+import org.opensearch.action.index.IndexRequestBuilder;
 import org.opensearch.action.index.IndexResponse;
 import org.opensearch.action.search.CreatePitAction;
 import org.opensearch.action.search.CreatePitRequest;
@@ -46,6 +48,7 @@ import org.opensearch.action.termvectors.TermVectorsRequestBuilder;
 import org.opensearch.action.termvectors.TermVectorsResponse;
 import org.opensearch.action.update.UpdateResponse;
 import org.opensearch.cluster.ClusterState;
+import org.opensearch.cluster.action.shard.ShardStateAction;
 import org.opensearch.cluster.health.ClusterHealthStatus;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
@@ -59,6 +62,7 @@ import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.set.Sets;
+import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.core.concurrency.OpenSearchRejectedExecutionException;
 import org.opensearch.core.index.shard.ShardId;
@@ -74,6 +78,9 @@ import org.opensearch.index.engine.EngineConfig;
 import org.opensearch.index.engine.NRTReplicationReaderManager;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.indices.recovery.FileChunkRequest;
+import org.opensearch.indices.recovery.PeerRecoverySourceService;
+import org.opensearch.indices.recovery.PeerRecoveryTargetService;
+import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.indices.replication.checkpoint.PublishCheckpointAction;
 import org.opensearch.indices.replication.common.ReplicationType;
 import org.opensearch.node.NodeClosedException;
@@ -86,8 +93,8 @@ import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.junit.annotations.TestLogging;
 import org.opensearch.test.transport.MockTransportService;
-import org.opensearch.transport.RemoteTransportException;
-import org.opensearch.transport.TransportService;
+import org.opensearch.test.transport.StubbableTransport;
+import org.opensearch.transport.*;
 import org.opensearch.transport.client.Requests;
 import org.junit.Before;
 
@@ -103,6 +110,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -123,6 +131,8 @@ import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertNoFailures
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertSearchHits;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.not;
 
 @OpenSearchIntegTestCase.ClusterScope(scope = OpenSearchIntegTestCase.Scope.TEST, numDataNodes = 0)
 public class SegmentReplicationIT extends SegmentReplicationBaseIT {
@@ -134,6 +144,170 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
 
     private static String indexOrAlias() {
         return randomBoolean() ? INDEX_NAME : "alias";
+    }
+
+    /**
+     * Tests scenario where recovery target successfully sends recovery request to source but then the channel gets closed while
+     * the source is working on the recovery process.
+     */
+    @Repeat(iterations = 100)
+    public void testDisconnectsDuringRecovery() throws Exception {
+        boolean primaryRelocation = false;
+        final String indexName = "test";
+        final Settings nodeSettings = Settings.builder()
+            .put(
+                RecoverySettings.INDICES_RECOVERY_RETRY_DELAY_NETWORK_SETTING.getKey(),
+                TimeValue.timeValueMillis(randomIntBetween(0, 100))
+            )
+            .build();
+        TimeValue disconnectAfterDelay = TimeValue.timeValueMillis(randomIntBetween(0, 100));
+        // start a cluster-manager node
+        String clusterManagerNodeName = internalCluster().startClusterManagerOnlyNode(nodeSettings);
+
+        final String blueNodeName = internalCluster().startNode(
+            Settings.builder().put("node.attr.color", "blue").put(nodeSettings).build()
+        );
+        final String redNodeName = internalCluster().startNode(Settings.builder().put("node.attr.color", "red").put(nodeSettings).build());
+
+        logger.info("blue node {} red node {}", blueNodeName, redNodeName);
+        client().admin()
+            .indices()
+            .prepareCreate(indexName)
+            .setSettings(
+                Settings.builder()
+                    .put(IndexMetadata.INDEX_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "color", "blue")
+                    .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                    .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
+            )
+            .get();
+
+        List<IndexRequestBuilder> requests = new ArrayList<>();
+        int numDocs = scaledRandomIntBetween(25, 50);
+        for (int i = 0; i < numDocs; i++) {
+            requests.add(client().prepareIndex(indexName).setSource("{}", XContentType.JSON));
+        }
+        indexRandom(true, requests);
+        ensureSearchable(indexName);
+        assertHitCount(client().prepareSearch(indexName).get(), numDocs);
+
+        MockTransportService clusterManagerTransportService = (MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            clusterManagerNodeName
+        );
+        MockTransportService blueMockTransportService = (MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            blueNodeName
+        );
+        MockTransportService redMockTransportService = (MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            redNodeName
+        );
+
+        redMockTransportService.addSendBehavior(blueMockTransportService, new StubbableTransport.SendRequestBehavior() {
+            private final AtomicInteger count = new AtomicInteger();
+
+            @Override
+            public void sendRequest(
+                Transport.Connection connection,
+                long requestId,
+                String action,
+                TransportRequest request,
+                TransportRequestOptions options
+            ) throws IOException {
+                logger.info("--> red node sending request {} on {}", action, connection.getNode());
+                if (PeerRecoverySourceService.Actions.START_RECOVERY.equals(action) && count.incrementAndGet() == 1) {
+                    // ensures that it's considered as valid recovery attempt by source
+                    try {
+                        assertBusy(
+                            () -> assertThat(
+                                "Expected there to be some initializing shards",
+                                client(blueNodeName).admin()
+                                    .cluster()
+                                    .prepareState()
+                                    .setLocal(true)
+                                    .get()
+                                    .getState()
+                                    .getRoutingTable()
+                                    .index("test")
+                                    .shard(0)
+                                    .getAllInitializingShards(),
+                                not(empty())
+                            )
+                        );
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                    connection.sendRequest(requestId, action, request, options);
+                    logger.info("red node {} send START_RECOVERY request", redNodeName);
+                    try {
+                        Thread.sleep(disconnectAfterDelay.millis());
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    logger.info("red node {} mock disconnection exception", redNodeName);
+                    throw new ConnectTransportException(
+                        connection.getNode(),
+                        "DISCONNECT: simulation disconnect after successfully sending " + action + " request"
+                    );
+                } else {
+                    connection.sendRequest(requestId, action, request, options);
+                }
+            }
+        });
+
+        final AtomicBoolean finalized = new AtomicBoolean();
+        blueMockTransportService.addSendBehavior(redMockTransportService, (connection, requestId, action, request, options) -> {
+            logger.info("--> blue node sending request {} on {}", action, connection.getNode());
+            if (action.equals(PeerRecoveryTargetService.Actions.FINALIZE)) {
+                finalized.set(true);
+            }
+            connection.sendRequest(requestId, action, request, options);
+        });
+
+        for (MockTransportService mockTransportService : Arrays.asList(redMockTransportService, blueMockTransportService)) {
+            mockTransportService.addSendBehavior(clusterManagerTransportService, (connection, requestId, action, request, options) -> {
+                logger.info("--> sending request {} on {}", action, connection.getNode());
+                if ((primaryRelocation && finalized.get()) == false) {
+                    logger.info("non primary relocation and non finalize, action {}", action);
+                    assertNotEquals(action, ShardStateAction.SHARD_FAILED_ACTION_NAME);
+                }
+                connection.sendRequest(requestId, action, request, options);
+            });
+        }
+
+        if (primaryRelocation) {
+            logger.info("--> starting primary relocation recovery from blue to red");
+            client().admin()
+                .indices()
+                .prepareUpdateSettings(indexName)
+                .setSettings(Settings.builder().put(IndexMetadata.INDEX_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "color", "red"))
+                .get();
+
+            ensureGreen(); // also waits for relocation / recovery to complete
+            // if a primary relocation fails after the source shard has been marked as relocated, both source and target are failed. If the
+            // source shard is moved back to started because the target fails first, it's possible that there is a cluster state where the
+            // shard is marked as started again (and ensureGreen returns), but while applying the cluster state the primary is failed and
+            // will be reallocated. The cluster will thus become green, then red, then green again. Triggering a refresh here before
+            // searching helps, as in contrast to search actions, refresh waits for the closed shard to be reallocated.
+            client().admin().indices().prepareRefresh(indexName).get();
+        } else {
+            logger.info("--> starting replica recovery from blue to red");
+            client().admin()
+                .indices()
+                .prepareUpdateSettings(indexName)
+                .setSettings(
+                    Settings.builder()
+                        .put(IndexMetadata.INDEX_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "color", "red,blue")
+                        .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                )
+                .get();
+
+            ensureGreen();
+        }
+
+        for (int i = 0; i < 10; i++) {
+            assertHitCount(client().prepareSearch(indexName).get(), numDocs);
+        }
     }
 
     public void testRetryPublishCheckPoint() throws Exception {
