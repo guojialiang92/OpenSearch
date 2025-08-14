@@ -261,6 +261,7 @@ import static org.opensearch.index.shard.IndexShard.ShardMigrationState.REMOTE_M
 import static org.opensearch.index.shard.IndexShard.ShardMigrationState.REMOTE_NON_MIGRATING;
 import static org.opensearch.index.translog.Translog.Durability;
 import static org.opensearch.index.translog.Translog.TRANSLOG_UUID_KEY;
+import static org.opensearch.indices.replication.SegmentReplicationSourceHandler.sourceHandlerCountDownLatch;
 
 /**
  * An OpenSearch index shard
@@ -269,7 +270,8 @@ import static org.opensearch.index.translog.Translog.TRANSLOG_UUID_KEY;
  */
 @PublicApi(since = "1.0.0")
 public class IndexShard extends AbstractIndexShardComponent implements IndicesClusterStateService.Shard {
-
+    public static boolean TEST_ENABLE = false;
+    public static CountDownLatch indexShardCountDownLatch = new CountDownLatch(1);
     private final ThreadPool threadPool;
     private final MapperService mapperService;
     private final IndexCache indexCache;
@@ -1020,6 +1022,12 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                  */
                 verifyRelocatingState();
                 final ReplicationTracker.PrimaryContext primaryContext = replicationTracker.startRelocationHandoff(targetAllocationId);
+                if (TEST_ENABLE) {
+                    logger.info("sourceHandlerCountDownLatch count down");
+                    sourceHandlerCountDownLatch.countDown();
+                    logger.info("indexShardCountDownLatch await");
+                    indexShardCountDownLatch.await();
+                }
                 try {
                     consumer.accept(primaryContext);
                     synchronized (mutex) {

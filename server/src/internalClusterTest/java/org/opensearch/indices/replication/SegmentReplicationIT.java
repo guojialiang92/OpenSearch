@@ -9,6 +9,7 @@
 package org.opensearch.indices.replication;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
+import com.carrotsearch.randomizedtesting.annotations.Repeat;
 
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -22,6 +23,7 @@ import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.index.StandardDirectoryReader;
 import org.apache.lucene.tests.util.TestUtil;
 import org.apache.lucene.util.BytesRef;
+import org.opensearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.opensearch.action.admin.cluster.stats.ClusterStatsResponse;
 import org.opensearch.action.admin.indices.alias.Alias;
 import org.opensearch.action.admin.indices.flush.FlushRequest;
@@ -53,6 +55,8 @@ import org.opensearch.cluster.routing.Preference;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.allocation.command.CancelAllocationCommand;
+import org.opensearch.cluster.routing.allocation.command.MoveAllocationCommand;
+import org.opensearch.common.Priority;
 import org.opensearch.common.action.ActionFuture;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
@@ -184,6 +188,51 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
 
         waitForSearchableDocs(1, primaryNode, replicaNode);
         replicaTransportService.clearAllRules();
+    }
+
+    @Repeat(iterations = 1000)
+    public void testSimple() throws Exception {
+        final String primary = internalCluster().startDataOnlyNode();
+        createIndex(INDEX_NAME);
+        ensureYellowAndNoInitializingShards(INDEX_NAME);
+        final String replica = internalCluster().startDataOnlyNode();
+        ensureGreen(INDEX_NAME);
+
+        final String newPrimary = internalCluster().startDataOnlyNode();
+
+        ClusterHealthResponse clusterHealthResponse = client().admin()
+            .cluster()
+            .prepareHealth()
+            .setWaitForEvents(Priority.LANGUID)
+            .setWaitForNodes("4")
+            .execute()
+            .actionGet();
+        assertEquals(clusterHealthResponse.isTimedOut(), false);
+
+        logger.info("environment ready");
+        IndexShard.TEST_ENABLE = true;
+
+        client().prepareIndex(INDEX_NAME).setId("1").setSource("foo", "bar").setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).get();
+        refresh(INDEX_NAME);
+
+        client().admin()
+            .cluster()
+            .prepareReroute()
+            .add(new MoveAllocationCommand(INDEX_NAME, 0, primary, newPrimary))
+            .execute()
+            .actionGet();
+        logger.info("execute relocate");
+
+        assertBusy(() -> {
+            ClusterState state = client().admin().cluster().prepareState().execute().actionGet().getState();
+            assertEquals(
+                state.getRoutingNodes().node(state.nodes().resolveNode(newPrimary).getId()).iterator().next().state(),
+                ShardRoutingState.STARTED
+            );
+        }, 1, TimeUnit.MINUTES);
+
+        waitForSearchableDocs(1, newPrimary, replica);
+        logger.info("test successful");
     }
 
     public void testPrimaryStopped_ReplicaPromoted() throws Exception {

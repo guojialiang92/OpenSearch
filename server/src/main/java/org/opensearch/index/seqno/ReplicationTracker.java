@@ -1197,6 +1197,7 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
     public synchronized void updateVisibleCheckpointForShard(final String allocationId, final ReplicationCheckpoint visibleCheckpoint) {
         assert indexSettings.isSegRepEnabledOrRemoteNode();
         assert primaryMode;
+        // assert handoffInProgress == false will cause SegmentReplicationIT.testSimple to generate exception
         assert handoffInProgress == false;
         assert invariant();
         final CheckpointState cps = checkpoints.get(allocationId);

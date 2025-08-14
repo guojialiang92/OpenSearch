@@ -36,15 +36,20 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+
+import static org.opensearch.index.shard.IndexShard.TEST_ENABLE;
+import static org.opensearch.index.shard.IndexShard.indexShardCountDownLatch;
 
 /**
  * Orchestrates sending requested segment files to a target shard.
  *
  * @opensearch.internal
  */
-class SegmentReplicationSourceHandler {
+public class SegmentReplicationSourceHandler {
+    public static CountDownLatch sourceHandlerCountDownLatch = new CountDownLatch(1);
 
     private final IndexShard shard;
     private final CopyState copyState;
@@ -160,7 +165,15 @@ class SegmentReplicationSourceHandler {
 
             sendFileStep.whenComplete(r -> {
                 try {
+                    if (TEST_ENABLE && request.getTargetNode().getName().equals("node_t2")) {
+                        logger.info("sourceHandlerCountDownLatch await");
+                        sourceHandlerCountDownLatch.await();
+                    }
                     shard.updateVisibleCheckpointForShard(allocationId, copyState.getCheckpoint());
+                    if (TEST_ENABLE && request.getTargetNode().getName().equals("node_t2")) {
+                        logger.info("indexShardCountDownLatch count down");
+                        indexShardCountDownLatch.countDown();
+                    }
                     future.onResponse(new GetSegmentFilesResponse(List.of(storeFileMetadata)));
                     timer.stop();
                 } finally {

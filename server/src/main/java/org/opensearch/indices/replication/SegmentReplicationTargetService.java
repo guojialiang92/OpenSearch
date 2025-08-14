@@ -582,6 +582,7 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
     }
 
     private void forceReplication(ForceSyncRequest request, ActionListener<TransportResponse> listener) {
+        logger.info("execute forceReplication");
         final ShardId shardId = request.getShardId();
         assert indicesService != null;
         final IndexShard indexShard = indicesService.getShardOrNull(shardId);
