@@ -173,8 +173,10 @@ public class ReplicationOperation<
             final ReplicationGroup replicationGroup = primary.getReplicationGroup();
             final PendingReplicationActions pendingReplicationActions = primary.getPendingReplicationActions();
             markUnavailableShardsAsStale(replicaRequest, replicationGroup);
+            logger.info("primary perform on replicas");
             performOnReplicas(replicaRequest, globalCheckpoint, maxSeqNoOfUpdatesOrDeletes, replicationGroup, pendingReplicationActions);
         }
+        logger.info("primary runPostReplicationActions");
         primaryResult.runPostReplicationActions(new ActionListener<Void>() {
 
             @Override
@@ -253,6 +255,7 @@ public class ReplicationOperation<
         final ActionListener<ReplicaResponse> replicationListener = new ActionListener<ReplicaResponse>() {
             @Override
             public void onResponse(ReplicaResponse response) {
+                logger.info("write request response");
                 successfulShards.incrementAndGet();
                 try {
                     updateCheckPoints(shard, response::localCheckpoint, response::globalCheckpoint);

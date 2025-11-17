@@ -2723,7 +2723,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         Translog.Operation operation;
         while ((operation = snapshot.next()) != null) {
             try {
-                logger.trace("[translog] recover op {}", operation);
+                logger.info("[translog] recover op {}", operation);
                 Engine.Result result = applyTranslogOperation(engine, operation, origin);
                 switch (result.getResultType()) {
                     case FAILURE:

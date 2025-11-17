@@ -121,6 +121,7 @@ public class InternalTranslogManager implements TranslogManager {
     @Override
     public int recoverFromTranslog(TranslogRecoveryRunner translogRecoveryRunner, long localCheckpoint, long recoverUpToSeqNo)
         throws IOException {
+        logger.info("recovery translog ops from [{}] to [{}]", localCheckpoint, recoverUpToSeqNo);
         int opsRecovered = 0;
         translogEventListener.onBeginTranslogRecovery();
         try (ReleasableLock ignored = readLock.acquire()) {
@@ -147,6 +148,7 @@ public class InternalTranslogManager implements TranslogManager {
         final int opsRecovered;
         if (localCheckpoint < recoverUpToSeqNo) {
             try (Translog.Snapshot snapshot = translog.newSnapshot(localCheckpoint + 1, recoverUpToSeqNo)) {
+                logger.info("translog snapshot size {}", snapshot.totalOperations());
                 opsRecovered = translogRecoveryRunner.run(snapshot);
             } catch (Exception e) {
                 throw new TranslogException(shardId, "failed to recover from translog", e);
@@ -158,7 +160,7 @@ public class InternalTranslogManager implements TranslogManager {
         // note: if opsRecovered == 0 and we have older translogs it means they are corrupted or 0 length.
         assert pendingTranslogRecovery.get() : "translogRecovery is not pending but should be";
         pendingTranslogRecovery.set(false); // we are good - now we can commit
-        logger.trace(
+        logger.info(
             () -> new ParameterizedMessage(
                 "flushing post recovery from translog: ops recovered [{}], current translog generation [{}]",
                 opsRecovered,

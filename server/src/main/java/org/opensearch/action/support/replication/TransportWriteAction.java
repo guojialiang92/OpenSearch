@@ -541,6 +541,7 @@ public abstract class TransportWriteAction<
                 });
             }
             if (sync) {
+                logger.info("sync translog");
                 assert pendingOps.get() > 0;
                 indexShard.sync(location, (ex) -> {
                     syncFailure.set(ex);

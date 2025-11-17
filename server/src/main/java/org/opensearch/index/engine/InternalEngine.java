@@ -148,6 +148,10 @@ public class InternalEngine extends Engine {
     @Nullable
     protected volatile String forceMergeUUID;
 
+    public static boolean wait = false;
+    public static CountDownLatch writeLatch = new CountDownLatch(1);
+    public static CountDownLatch flushLatch = new CountDownLatch(1);
+
     /**
      * When we last pruned expired tombstones from versionMap.deletes:
      */
@@ -951,7 +955,17 @@ public class InternalEngine extends Engine {
                     } else {
                         markSeqNoAsSeen(index.seqNo());
                     }
-
+                    logger.info("primary max seq update to {}", Long.toString(localCheckpointTracker.getMaxSeqNo()));
+                    try {
+                        if (wait) {
+                            logger.info("index doc 1, flush latch count down");
+                            flushLatch.countDown();
+                            logger.info("write latch await");
+                            writeLatch.await();
+                        }
+                    } catch (InterruptedException e) {
+                        // do nothing
+                    }
                     assert index.seqNo() >= 0 : "ops should have an assigned seq no.; origin: " + index.origin();
 
                     if (plan.indexIntoLucene || plan.addStaleOpToLucene) {
@@ -2272,8 +2286,15 @@ public class InternalEngine extends Engine {
     public GatedCloseable<SegmentInfos> getSegmentInfosSnapshot() {
         final OpenSearchDirectoryReader reader;
         try {
+            long latestRefreshedCheckpoint = lastRefreshedCheckpointListener.refreshedCheckpoint.get();
+            logger.info("primary latest refreshed checkpoint [{}]", latestRefreshedCheckpoint);
+
             reader = internalReaderManager.acquire();
-            return new GatedCloseable<>(((StandardDirectoryReader) reader.getDelegate()).getSegmentInfos(), () -> {
+
+            SegmentInfos segmentInfos = ((StandardDirectoryReader) reader.getDelegate()).getSegmentInfos();
+            segmentInfos.userData.put("latest_refresh_checkpoint", String.valueOf(latestRefreshedCheckpoint));
+
+            return new GatedCloseable<>(segmentInfos, () -> {
                 try {
                     internalReaderManager.release(reader);
                 } catch (AlreadyClosedException e) {
@@ -2620,6 +2641,7 @@ public class InternalEngine extends Engine {
                 if (currentForceMergeUUID != null) {
                     commitData.put(FORCE_MERGE_UUID_KEY, currentForceMergeUUID);
                 }
+                logger.info("primary flush local checkpoint {} max seq no {}", localCheckpoint, Long.toString(localCheckpointTracker.getMaxSeqNo()));
                 logger.trace("committing writer with commit data [{}]", commitData);
                 return commitData.entrySet().iterator();
             });

@@ -895,6 +895,7 @@ public class Store extends AbstractIndexShardComponent implements Closeable, Ref
         assert indexSettings.isSegRepEnabledOrRemoteNode() || indexSettings.isAssignedOnRemoteNode();
         metadataLock.writeLock().lock();
         try {
+            logger.info("replica commit processed: {}, max seq no: {}", processedCheckpoint, maxSeqNo);
             final Map<String, String> userData = new HashMap<>(latestSegmentInfos.getUserData());
             userData.put(LOCAL_CHECKPOINT_KEY, String.valueOf(processedCheckpoint));
             userData.put(SequenceNumbers.MAX_SEQ_NO, Long.toString(maxSeqNo));

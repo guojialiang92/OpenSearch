@@ -848,14 +848,14 @@ public abstract class TransportReplicationAction<
                             replica.getLastSyncedGlobalCheckpoint()
                         );
                         releasable.close(); // release shard operation lock before responding to caller
-                        if (logger.isTraceEnabled()) {
-                            logger.trace(
+//                        if (logger.isTraceEnabled()) {
+                            logger.info(
                                 "action [{}] completed on shard [{}] for request [{}]",
                                 transportReplicaAction,
                                 replicaRequest.getRequest().shardId(),
                                 replicaRequest.getRequest()
                             );
-                        }
+//                        }
                         setPhase(task, "finished");
                         onCompletionListener.onResponse(response);
                     }, e -> {

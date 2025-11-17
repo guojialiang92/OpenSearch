@@ -18,6 +18,7 @@ import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.lucene.Lucene;
 import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.common.util.Countable;
 import org.opensearch.common.util.concurrent.ReleasableLock;
 import org.opensearch.common.util.io.IOUtils;
 import org.opensearch.core.common.unit.ByteSizeValue;
@@ -48,6 +49,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
 
 import static org.opensearch.index.seqno.SequenceNumbers.MAX_SEQ_NO;
+import static org.opensearch.index.seqno.SequenceNumbers.max;
 
 /**
  * This is an {@link Engine} implementation intended for replica shards when Segment Replication
@@ -58,6 +60,7 @@ import static org.opensearch.index.seqno.SequenceNumbers.MAX_SEQ_NO;
  */
 @PublicApi(since = "1.0.0")
 public class NRTReplicationEngine extends Engine {
+    public static final CountDownLatch maxSeqNoLatch = new CountDownLatch(1);
 
     private volatile SegmentInfos lastCommittedSegmentInfos;
     private final Object lastCommittedSegmentInfosMutex = new Object();
@@ -165,10 +168,12 @@ public class NRTReplicationEngine extends Engine {
     }
 
     public synchronized void updateSegments(final SegmentInfos infos) throws IOException {
+        logger.info("replica updating segments");
         try (ReleasableLock lock = writeLock.acquire()) {
             // Update the current infos reference on the Engine's reader.
             ensureOpen();
             final long maxSeqNo = Long.parseLong(infos.userData.get(MAX_SEQ_NO));
+            final long latestRefreshedCheckpoint = Long.parseLong(infos.userData.get("latest_refresh_checkpoint"));
             final long incomingGeneration = infos.getGeneration();
             readerManager.updateSegments(infos);
             // Ensure that we commit and clear the local translog if a new commit has been made on the primary.
@@ -181,7 +186,12 @@ public class NRTReplicationEngine extends Engine {
                 translogManager.rollTranslogGeneration();
             }
             this.lastReceivedPrimaryGen = incomingGeneration;
+            logger.info("replica fast forward processed seq no to {}, latestRefreshedCheckpoint {}",
+                maxSeqNo, latestRefreshedCheckpoint);
             localCheckpointTracker.fastForwardProcessedSeqNo(maxSeqNo);
+
+            // fixed
+//            localCheckpointTracker.fastForwardProcessedSeqNo(latestRefreshedCheckpoint);
         }
     }
 
@@ -243,7 +253,11 @@ public class NRTReplicationEngine extends Engine {
         indexResult.setTranslogLocation(location);
         indexResult.setTook(System.nanoTime() - index.startTime());
         indexResult.freeze();
+        logger.info("replica current max seq no [{}], advance max seq no [{}]", localCheckpointTracker.getMaxSeqNo(), index.seqNo());
         localCheckpointTracker.advanceMaxSeqNo(index.seqNo());
+        if (InternalEngine.wait) {
+            maxSeqNoLatch.countDown();
+        }
         return indexResult;
     }
 
