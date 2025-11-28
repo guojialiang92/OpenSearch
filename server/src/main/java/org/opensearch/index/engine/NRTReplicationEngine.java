@@ -190,7 +190,7 @@ public class NRTReplicationEngine extends Engine {
                 maxSeqNo, latestRefreshedCheckpoint);
             localCheckpointTracker.fastForwardProcessedSeqNo(maxSeqNo);
 
-            // fixed
+//             fixed
 //            localCheckpointTracker.fastForwardProcessedSeqNo(latestRefreshedCheckpoint);
         }
     }

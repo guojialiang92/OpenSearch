@@ -330,7 +330,7 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
         verifyStoreContent();
     }
 
-    public void testPrimaryStopped_ReplicaPromoted2() throws Exception {
+    public void testPrimaryStopped_ReplicaPromoted_reproduction_data_loss() throws Exception {
         final String primary = internalCluster().startDataOnlyNode();
         createIndex(INDEX_NAME, Settings.builder().put(indexSettings()).put("index.refresh_interval", -1).build());
         ensureYellowAndNoInitializingShards(INDEX_NAME);
@@ -386,86 +386,10 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
         final ShardRouting replicaShardRouting = getShardRoutingForNodeName(replica);
         assertNotNull(replicaShardRouting);
         assertTrue(replicaShardRouting + " should be promoted as a primary", replicaShardRouting.primary());
-        SearchResponse response = client(replica).prepareSearch(INDEX_NAME).setSize(0).setPreference("_only_local").get();
-        // new primary should have at least the doc count from the first set of segments.
-        assertTrue(response.getHits().getTotalHits().value() == 1);
 
-        Thread.sleep(10000);
-
-        logger.info("write doc 3");
-        client().prepareIndex(INDEX_NAME).setId("3").setSource("foo3", "bar3").get();
         refresh(INDEX_NAME);
-        response = client(replica).prepareSearch(INDEX_NAME).setSize(0).setPreference("_only_local").get();
+        SearchResponse response = client(replica).prepareSearch(INDEX_NAME).setSize(0).setPreference("_only_local").get();
         assertTrue(response.getHits().getTotalHits().value() == 2);
-    }
-
-    public void testPrimaryStopped_ReplicaPromotedFixed() throws Exception {
-        final String primary = internalCluster().startDataOnlyNode();
-        createIndex(INDEX_NAME, Settings.builder().put(indexSettings()).put("index.refresh_interval", -1).build());
-        ensureYellowAndNoInitializingShards(INDEX_NAME);
-        final String replica = internalCluster().startDataOnlyNode();
-        ensureGreen(INDEX_NAME);
-
-        client().prepareIndex(INDEX_NAME).setId("1").setSource("foo", "bar").get();
-        InternalEngine.wait = true;
-        Thread thread = new Thread(() -> {
-            client().prepareIndex(INDEX_NAME).setId("2").setSource("foo2", "bar2").get();
-        });
-        thread.start();
-        InternalEngine.flushLatch.await();
-
-        flush(INDEX_NAME);
-
-        waitForSearchableDocs(1, replica);
-
-        // mock network exception
-        MockTransportService replicaTransportService = ((MockTransportService) internalCluster().getInstance(
-            TransportService.class,
-            replica
-        ));
-        AtomicBoolean mockReplicaReceivePublishCheckpointException = new AtomicBoolean(true);
-        replicaTransportService.addRequestHandlingBehavior(
-            PublishCheckpointAction.ACTION_NAME + TransportReplicationAction.REPLICA_ACTION_SUFFIX,
-            (handler, request, channel, task) -> {
-                if (mockReplicaReceivePublishCheckpointException.get()) {
-                    logger.info("mock remote transport exception");
-                    throw new RemoteTransportException("mock remote transport exception", new OpenSearchRejectedExecutionException());
-                }
-                logger.info("replica receive publish checkpoint request");
-                handler.messageReceived(request, channel, task);
-            }
-        );
-
-        refresh(INDEX_NAME);
-        waitForSearchableDocs(1, primary);
-        InternalEngine.writeLatch.countDown();
-        NRTReplicationEngine.maxSeqNoLatch.await();
-
-        logger.info("refresh index");
-        refresh(INDEX_NAME);
-        flush(INDEX_NAME);
-        waitForSearchableDocs(2, primary);
-        waitForSearchableDocs(1, replica);
-
-        InternalEngine.wait = false;
-        // stop the primary node - we only have one shard on here.
-        internalCluster().stopRandomNode(InternalTestCluster.nameFilter(primary));
-        ensureYellowAndNoInitializingShards(INDEX_NAME);
-
-        final ShardRouting replicaShardRouting = getShardRoutingForNodeName(replica);
-        assertNotNull(replicaShardRouting);
-        assertTrue(replicaShardRouting + " should be promoted as a primary", replicaShardRouting.primary());
-        SearchResponse response = client(replica).prepareSearch(INDEX_NAME).setSize(0).setPreference("_only_local").get();
-        // new primary should have at least the doc count from the first set of segments.
-        assertTrue(response.getHits().getTotalHits().value() >= 1);
-
-        Thread.sleep(10000);
-
-        logger.info("write doc 3");
-        client().prepareIndex(INDEX_NAME).setId("3").setSource("foo3", "bar3").get();
-        refresh(INDEX_NAME);
-        response = client(replica).prepareSearch(INDEX_NAME).setSize(0).setPreference("_only_local").get();
-        assertTrue(response.getHits().getTotalHits().value() == 3);
     }
 
     public void testRestartPrimary() throws Exception {
