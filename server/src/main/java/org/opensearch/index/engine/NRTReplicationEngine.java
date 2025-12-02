@@ -188,10 +188,10 @@ public class NRTReplicationEngine extends Engine {
             this.lastReceivedPrimaryGen = incomingGeneration;
             logger.info("replica fast forward processed seq no to {}, latestRefreshedCheckpoint {}",
                 maxSeqNo, latestRefreshedCheckpoint);
-            localCheckpointTracker.fastForwardProcessedSeqNo(maxSeqNo);
+//            localCheckpointTracker.fastForwardProcessedSeqNo(maxSeqNo);
 
 //             fixed
-//            localCheckpointTracker.fastForwardProcessedSeqNo(latestRefreshedCheckpoint);
+            localCheckpointTracker.fastForwardProcessedSeqNo(latestRefreshedCheckpoint);
         }
     }
 
