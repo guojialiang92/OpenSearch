@@ -47,12 +47,14 @@ import org.opensearch.action.admin.indices.recovery.RecoveryResponse;
 import org.opensearch.action.admin.indices.stats.CommonStatsFlags;
 import org.opensearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.opensearch.action.admin.indices.stats.ShardStats;
+import org.opensearch.action.bulk.BulkAction;
 import org.opensearch.action.index.IndexRequestBuilder;
 import org.opensearch.action.index.IndexResponse;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.support.ActiveShardCount;
 import org.opensearch.action.support.PlainActionFuture;
 import org.opensearch.action.support.WriteRequest.RefreshPolicy;
+import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
 import org.opensearch.action.support.replication.ReplicationResponse;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.NodeConnectionsService;
@@ -77,6 +79,8 @@ import org.opensearch.common.SuppressForbidden;
 import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.common.util.concurrent.OpenSearchExecutors;
+import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.common.Strings;
 import org.opensearch.core.common.breaker.CircuitBreaker;
 import org.opensearch.core.common.breaker.CircuitBreakingException;
@@ -97,6 +101,7 @@ import org.opensearch.index.recovery.RecoveryStats;
 import org.opensearch.index.seqno.ReplicationTracker;
 import org.opensearch.index.seqno.RetentionLeases;
 import org.opensearch.index.seqno.SequenceNumbers;
+import org.opensearch.index.shard.GlobalCheckpointListeners;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.store.StoreStats;
@@ -125,13 +130,8 @@ import org.opensearch.test.engine.MockEngineSupport;
 import org.opensearch.test.store.MockFSIndexStore;
 import org.opensearch.test.transport.MockTransportService;
 import org.opensearch.test.transport.StubbableTransport;
-import org.opensearch.transport.ConnectTransportException;
-import org.opensearch.transport.Transport;
-import org.opensearch.transport.TransportChannel;
-import org.opensearch.transport.TransportRequest;
-import org.opensearch.transport.TransportRequestHandler;
-import org.opensearch.transport.TransportRequestOptions;
-import org.opensearch.transport.TransportService;
+import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.*;
 import org.hamcrest.Matcher;
 
 import java.io.IOException;
@@ -142,9 +142,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Spliterators;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -157,6 +155,7 @@ import static java.util.Collections.singletonMap;
 import static java.util.stream.Collectors.toList;
 import static org.opensearch.action.DocWriteResponse.Result.CREATED;
 import static org.opensearch.action.DocWriteResponse.Result.UPDATED;
+import static org.opensearch.action.support.ActionTestUtils.assertNoFailureListener;
 import static org.opensearch.indices.recovery.RecoverySettings.INDICES_RECOVERY_CHUNK_SIZE_SETTING;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertHitCount;
@@ -2401,4 +2400,108 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
         );
     }
 
+    public void testDeleteIndexDuringFinalization() throws Exception {
+        internalCluster().startClusterManagerOnlyNode();
+        final var primaryNode = internalCluster().startDataOnlyNode();
+        String indexName = "test-index";
+        createIndex(
+            indexName,
+            Settings.builder()
+                .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
+                .build()
+        );
+        ensureGreen(indexName);
+
+        int numDocs = randomIntBetween(10, 200);
+        final IndexRequestBuilder[] docs = new IndexRequestBuilder[numDocs];
+        for (int i = 0; i < numDocs; i++) {
+            docs[i] = client().prepareIndex(indexName)
+                .setSource("foo-int", randomInt(), "foo-string", randomAlphaOfLength(32), "foo-float", randomFloat());
+        }
+        indexRandom(randomBoolean(), docs);
+        assertThat(client().admin().indices().prepareFlush(indexName).get().getFailedShards(), equalTo(0));
+
+        final var replicaNode = internalCluster().startDataOnlyNode();
+
+        final PlainActionFuture<AcknowledgedResponse> deleteListener = new PlainActionFuture<>();
+
+        final var threadPool = internalCluster().clusterService().threadPool();
+        final var indexId = internalCluster().clusterService().state().routingTable().index(indexName).getIndex();
+        final var primaryIndexShard = internalCluster().getInstance(IndicesService.class, primaryNode)
+            .indexServiceSafe(indexId)
+            .getShard(0);
+        final var globalCheckpointBeforeRecovery = primaryIndexShard.getLastSyncedGlobalCheckpoint();
+
+        MockTransportService replicaNodeTransportService = ((MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            replicaNode
+        ));
+        replicaNodeTransportService.addRequestHandlingBehavior(
+            PeerRecoveryTargetService.Actions.TRANSLOG_OPS,
+            (handler, request, channel, task) -> handler.messageReceived(
+                request,
+                new TestTransportChannel(assertNoFailureListener(response -> {
+                    // Process the TRANSLOG_OPS response on the replica (avoiding failing it due to a concurrent delete) but
+                    // before sending the response back send another document to the primary, advancing the GCP to prevent the replica
+                    // being marked as in-sync (NB below we delay the replica write until after the index is deleted)
+                    client().prepareIndex(indexName).setSource("foo", "baz").execute(ActionListener.noOp());
+
+                    primaryIndexShard.addGlobalCheckpointListener(
+                        globalCheckpointBeforeRecovery + 1,
+                        new GlobalCheckpointListeners.GlobalCheckpointListener() {
+                            @Override
+                            public Executor executor() {
+                                return OpenSearchExecutors.newDirectExecutorService();
+                            }
+
+                            @Override
+                            public void accept(long globalCheckpoint, Exception e) {
+                                assertNull(e);
+
+                                // Now the GCP has advanced the replica won't be marked in-sync so respond to the TRANSLOG_OPS request
+                                // to start recovery finalization
+                                try {
+                                    channel.sendResponse(response);
+                                } catch (IOException ex) {
+                                    fail(ex.getMessage());
+                                }
+
+                                // Wait a short while for finalization to block on advancing the replica's GCP and then delete the index
+                                threadPool.schedule(
+                                    () -> client().admin().indices().prepareDelete(indexName).execute(deleteListener),
+                                    TimeValue.timeValueMillis(100),
+                                    ThreadPool.Names.GENERIC
+                                );
+                            }
+                        },
+                        TimeValue.timeValueSeconds(10)
+                    );
+                })),
+                task
+            )
+        );
+
+        replicaNodeTransportService.addRequestHandlingBehavior(
+            BulkAction.NAME + "[s][r]",
+            (handler, request, channel, task) -> {
+                PeerRecoverySourceService.countDownLatch.await();
+                handler.messageReceived(request, channel, task);
+            }
+        );
+
+        // Create the replica to trigger the whole process
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings(indexName)
+                .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1))
+        );
+
+        // Wait for the index to be deleted
+        assertTrue(deleteListener.get(20, TimeUnit.SECONDS).isAcknowledged());
+
+        final var peerRecoverySourceService = internalCluster().getInstance(PeerRecoverySourceService.class, primaryNode);
+        assertBusy(() -> assertEquals(0, peerRecoverySourceService.numberOfOngoingRecoveries()));
+    }
 }

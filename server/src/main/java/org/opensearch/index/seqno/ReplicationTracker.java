@@ -1643,13 +1643,16 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
             pendingInSync.add(allocationId);
             try {
                 while (true) {
+                    logger.info("waiting for replicated checkpoint to be marked as in-sync");
                     if (pendingInSync.contains(allocationId)) {
                         waitForLocalCheckpointToAdvance();
                     } else {
+                        logger.info("break local checkpoint to be marked as in-sync");
                         break;
                     }
                 }
             } finally {
+                logger.info("removed in-sync checkpoint " + allocationId);
                 pendingInSync.remove(allocationId);
             }
         } else {

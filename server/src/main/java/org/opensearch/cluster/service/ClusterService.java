@@ -379,4 +379,8 @@ public class ClusterService extends AbstractLifecycleComponent {
     ) {
         clusterManagerService.submitStateUpdateTasks(source, tasks, config, executor);
     }
+
+    public ThreadPool threadPool() {
+        return clusterApplierService.threadPool();
+    }
 }

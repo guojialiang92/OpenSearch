@@ -31,6 +31,8 @@
 
 package org.opensearch.common.util;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.ThreadInterruptedException;
 import org.opensearch.OpenSearchException;
 import org.opensearch.common.Nullable;
@@ -53,6 +55,7 @@ import java.util.Set;
  */
 @PublicApi(since = "1.0.0")
 public class CancellableThreads {
+    private static final Logger logger = LogManager.getLogger(CancellableThreads.class);
     private final Set<Thread> threads = new HashSet<>();
     // needs to be volatile as it is also read outside of synchronized blocks.
     private final SetOnce<OnCancel> onCancel = new SetOnce<>();
@@ -176,6 +179,7 @@ public class CancellableThreads {
         }
         cancelled = true;
         this.reason = reason;
+        logger.info("cancel thread [{}]", Thread.currentThread().getName());
         for (Thread thread : threads) {
             thread.interrupt();
         }

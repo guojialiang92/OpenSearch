@@ -68,6 +68,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * The source recovery accepts recovery requests from other peer shards and start the recovery process from this
@@ -140,10 +141,12 @@ public class PeerRecoverySourceService extends AbstractLifecycleComponent implem
     @Override
     protected void doClose() {}
 
+    public static CountDownLatch countDownLatch = new CountDownLatch(1);
     @Override
     public void beforeIndexShardClosed(ShardId shardId, @Nullable IndexShard indexShard, Settings indexSettings) {
         if (indexShard != null) {
             ongoingRecoveries.cancel(indexShard, "shard is closed");
+            countDownLatch.countDown();
         }
     }
 
