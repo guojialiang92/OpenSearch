@@ -42,6 +42,7 @@ import org.opensearch.action.admin.cluster.node.stats.NodesStatsResponse;
 import org.opensearch.action.admin.cluster.snapshots.create.CreateSnapshotResponse;
 import org.opensearch.action.admin.cluster.snapshots.restore.RestoreSnapshotResponse;
 import org.opensearch.action.admin.cluster.state.ClusterStateResponse;
+import org.opensearch.action.admin.indices.flush.FlushRequest;
 import org.opensearch.action.admin.indices.recovery.RecoveryRequest;
 import org.opensearch.action.admin.indices.recovery.RecoveryResponse;
 import org.opensearch.action.admin.indices.stats.CommonStatsFlags;
@@ -53,8 +54,10 @@ import org.opensearch.action.index.IndexResponse;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.support.ActiveShardCount;
 import org.opensearch.action.support.PlainActionFuture;
+import org.opensearch.action.support.WriteRequest;
 import org.opensearch.action.support.WriteRequest.RefreshPolicy;
 import org.opensearch.action.support.clustermanager.AcknowledgedResponse;
+import org.opensearch.action.support.replication.ReplicationOperation;
 import org.opensearch.action.support.replication.ReplicationResponse;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.NodeConnectionsService;
@@ -105,6 +108,7 @@ import org.opensearch.index.shard.GlobalCheckpointListeners;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.store.StoreStats;
+import org.opensearch.index.translog.Translog;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.indices.NodeIndicesStats;
 import org.opensearch.indices.analysis.AnalysisModule;
@@ -2503,5 +2507,124 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
 
         final var peerRecoverySourceService = internalCluster().getInstance(PeerRecoverySourceService.class, primaryNode);
         assertBusy(() -> assertEquals(0, peerRecoverySourceService.numberOfOngoingRecoveries()));
+    }
+
+    public void testAsyncTranslog() throws Exception {
+        internalCluster().startClusterManagerOnlyNode();
+        final var primaryNode = internalCluster().startDataOnlyNode();
+        String indexName = "test-index";
+        createIndex(
+            indexName,
+            Settings.builder()
+                .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
+                .put(IndexSettings.INDEX_TRANSLOG_DURABILITY_SETTING.getKey(), Translog.Durability.ASYNC.name())
+                .put(IndexSettings.INDEX_TRANSLOG_SYNC_INTERVAL_SETTING.getKey(), TimeValue.timeValueHours(24))
+                .build()
+        );
+        ensureGreen(indexName);
+
+        client().prepareIndex(indexName)
+            .setId(String.valueOf(0))
+            .setSource("foo0", "bar0")
+            .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE)
+            .get();
+        assertThat(client().admin().indices().prepareFlush(indexName).get().getFailedShards(), equalTo(0));
+
+        final var replicaNode = internalCluster().startDataOnlyNode();
+
+        final var indexId = internalCluster().clusterService().state().routingTable().index(indexName).getIndex();
+        final var primaryIndexShard = internalCluster().getInstance(IndicesService.class, primaryNode)
+            .indexServiceSafe(indexId)
+            .getShard(0);
+        final var globalCheckpointBeforeRecovery = primaryIndexShard.getLastSyncedGlobalCheckpoint();
+        logger.info("primary checkpoint before recovery {}", globalCheckpointBeforeRecovery);
+
+        MockTransportService replicaNodeTransportService = ((MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            replicaNode
+        ));
+        replicaNodeTransportService.addRequestHandlingBehavior(
+            PeerRecoveryTargetService.Actions.TRANSLOG_OPS,
+            (handler, request, channel, task) -> handler.messageReceived(
+                request,
+                new TestTransportChannel(assertNoFailureListener(response -> {
+                    // Process the TRANSLOG_OPS response on the replica (avoiding failing it due to a concurrent delete) but
+                    // before sending the response back send another document to the primary, advancing the GCP to prevent the replica
+                    // being marked as in-sync (NB below we delay the replica write until after the index is deleted)
+                    logger.info("index during translog ops");
+//                    client().prepareIndex(indexName).setSource("foo", "baz").execute(ActionListener.noOp());
+                    ReplicationOperation.lockEnable = true;
+                    client().prepareIndex(indexName)
+                        .setId(String.valueOf(1))
+                        .setSource("foo1", "bar1")
+                        .execute(ActionListener.noOp());
+
+                    ReplicationOperation.flushLatch.await();
+                    FlushRequest flushRequest = new FlushRequest(indexName).force(true).waitIfOngoing(true);
+                    primaryIndexShard.flush(flushRequest);
+                    ReplicationOperation.flushCompleteLatch.countDown();
+                    channel.sendResponse(response);
+
+//                    client().prepareIndex(indexName)
+//                        .setId(String.valueOf(1))
+//                        .setSource("foo1", "bar1")
+//                        .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE)
+//                        .get();
+
+
+//                    primaryIndexShard.addGlobalCheckpointListener(
+//                        globalCheckpointBeforeRecovery + 1,
+//                        new GlobalCheckpointListeners.GlobalCheckpointListener() {
+//                            @Override
+//                            public Executor executor() {
+//                                return OpenSearchExecutors.newDirectExecutorService();
+//                            }
+//
+//                            @Override
+//                            public void accept(long globalCheckpoint, Exception e) {
+//                                assertNull(e);
+//
+//                                // Now the GCP has advanced the replica won't be marked in-sync so respond to the TRANSLOG_OPS request
+//                                // to start recovery finalization
+//                                try {
+//                                    channel.sendResponse(response);
+//                                } catch (IOException ex) {
+//                                    fail(ex.getMessage());
+//                                }
+//                            }
+//                        },
+//                        TimeValue.timeValueSeconds(10)
+//                    );
+                })),
+                task
+            )
+        );
+
+        replicaNodeTransportService.addRequestHandlingBehavior(
+            BulkAction.NAME + "[s][r]",
+            (handler, request, channel, task) -> {
+                logger.info("replica receive bulk request");
+                handler.messageReceived(request, channel, task);
+            }
+        );
+
+        // Create the replica to trigger the whole process
+        assertAcked(
+            client().admin()
+                .indices()
+                .prepareUpdateSettings(indexName)
+                .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1))
+        );
+
+        // Wait for the index to be deleted
+//        assertTrue(deleteListener.get(20, TimeUnit.SECONDS).isAcknowledged());
+
+//        final var peerRecoverySourceService = internalCluster().getInstance(PeerRecoverySourceService.class, primaryNode);
+//        assertBusy(() -> assertEquals(0, peerRecoverySourceService.numberOfOngoingRecoveries()));
+        logger.info("wait for green");
+        ensureGreen(indexName);
+        replicaNodeTransportService.clearAllRules();
+        logger.info("finish test");
     }
 }

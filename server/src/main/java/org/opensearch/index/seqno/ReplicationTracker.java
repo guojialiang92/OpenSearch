@@ -1154,7 +1154,7 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
         final long previousGlobalCheckpoint = globalCheckpoint;
         if (newGlobalCheckpoint > previousGlobalCheckpoint) {
             globalCheckpoint = newGlobalCheckpoint;
-            logger.trace("updated global checkpoint from [{}] to [{}] due to [{}]", previousGlobalCheckpoint, globalCheckpoint, reason);
+            logger.info("updated global checkpoint from [{}] to [{}] due to [{}]", previousGlobalCheckpoint, globalCheckpoint, reason);
             onGlobalCheckpointUpdated.accept(globalCheckpoint);
         }
         assert invariant();
@@ -1710,11 +1710,21 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
             pending = false;
             cps.inSync = true;
             updateReplicationGroupAndNotify();
-            logger.trace("marked [{}] as in-sync", allocationId);
+            logger.info("marked [{}] as in-sync", allocationId);
             notifyAllWaiters();
+        } else {
+            try {
+                throw new RuntimeException();
+            } catch (Exception e) {
+                if (pending) {
+                    logger.info(String.format("update local checkpoint, pending %s, lcp %d, gcp %d", pending, cps.localCheckpoint, getGlobalCheckpoint()), e);
+                }
+            }
         }
         if (cps.replicated && increasedLocalCheckpoint && pending == false) {
             updateGlobalCheckpointOnPrimary();
+        } else {
+            logger.info("skip update global checkpoint");
         }
         assert invariant();
     }
@@ -1759,7 +1769,7 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
             + "]";
         if (globalCheckpoint != computedGlobalCheckpoint) {
             globalCheckpoint = computedGlobalCheckpoint;
-            logger.trace("updated global checkpoint to [{}]", computedGlobalCheckpoint);
+            logger.info("updated global checkpoint to [{}]", computedGlobalCheckpoint);
             onGlobalCheckpointUpdated.accept(computedGlobalCheckpoint);
         }
     }

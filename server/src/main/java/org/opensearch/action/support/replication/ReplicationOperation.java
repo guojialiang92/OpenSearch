@@ -64,6 +64,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -78,6 +79,9 @@ public class ReplicationOperation<
     Request extends ReplicationRequest<Request>,
     ReplicaRequest extends ReplicationRequest<ReplicaRequest>,
     PrimaryResultT extends ReplicationOperation.PrimaryResult<ReplicaRequest>> {
+    public static boolean lockEnable = false;
+    public static CountDownLatch flushLatch = new CountDownLatch(1);
+    public static CountDownLatch flushCompleteLatch = new CountDownLatch(1);
     private final Logger logger;
     private final ThreadPool threadPool;
     private final Request request;
@@ -176,11 +180,18 @@ public class ReplicationOperation<
             performOnReplicas(replicaRequest, globalCheckpoint, maxSeqNoOfUpdatesOrDeletes, replicationGroup, pendingReplicationActions);
         }
         primaryResult.runPostReplicationActions(new ActionListener<Void>() {
-
             @Override
             public void onResponse(Void aVoid) {
+                if (lockEnable) {
+                    try {
+                        flushLatch.countDown();
+                        flushCompleteLatch.await();
+                    } catch (Exception e) {
+                    }
+                }
                 successfulShards.incrementAndGet();
                 try {
+                    logger.info("handlePrimaryResult primary lcp {}, gcp {}", primary.localCheckpoint(), primary.globalCheckpoint());
                     updateCheckPoints(primary.routingEntry(), primary::localCheckpoint, primary::globalCheckpoint);
                 } finally {
                     decPendingAndFinishIfNeeded();
@@ -255,6 +266,7 @@ public class ReplicationOperation<
             public void onResponse(ReplicaResponse response) {
                 successfulShards.incrementAndGet();
                 try {
+                    logger.info("handle replica response, lcp {}, gcp {}", response.localCheckpoint(), response.globalCheckpoint());
                     updateCheckPoints(shard, response::localCheckpoint, response::globalCheckpoint);
                 } finally {
                     decPendingAndFinishIfNeeded();
