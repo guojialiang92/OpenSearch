@@ -229,7 +229,7 @@ public abstract class AbstractSegmentReplicationTarget extends ReplicationTarget
             .filter(md -> reuseFiles.contains(md.name()) == false)
             .collect(Collectors.toList());
 
-        logger.trace(
+        logger.info(
             () -> new ParameterizedMessage(
                 "Replication diff for checkpoint {} {} {}",
                 checkpointInfo.getCheckpoint(),

@@ -482,7 +482,7 @@ public abstract class RecoverySourceHandler {
                     totalSizeInBytes += md.length();
                 }
 
-                logger.trace(
+                logger.info(
                     "recovery [phase1]: recovering_files [{}] with total_size [{}], reusing_files [{}] with total_size [{}]",
                     phase1FileNames.size(),
                     new ByteSizeValue(totalSizeInBytes),

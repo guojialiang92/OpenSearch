@@ -86,7 +86,7 @@ public class LocalStorePeerRecoverySourceHandler extends RecoverySourceHandler {
         final StepListener<SendSnapshotResult> sendSnapshotStep = new StepListener<>();
 
         if (isSequenceNumberBasedRecovery) {
-            logger.trace("performing sequence numbers based recovery. starting at [{}]", request.startingSeqNo());
+            logger.info("performing sequence numbers based recovery. starting at [{}]", request.startingSeqNo());
             startingSeqNo = request.startingSeqNo();
             if (retentionLeaseRef.get() == null) {
                 createRetentionLease(startingSeqNo, ActionListener.map(sendFileStep, ignored -> SendFileResult.EMPTY));
@@ -113,7 +113,7 @@ public class LocalStorePeerRecoverySourceHandler extends RecoverySourceHandler {
             // always fall back to file-based ones, and only really presents a problem if this primary fails before things have settled
             // down.
             startingSeqNo = Long.parseLong(wrappedSafeCommit.get().getUserData().get(SequenceNumbers.LOCAL_CHECKPOINT_KEY)) + 1L;
-            logger.trace("performing file-based recovery followed by history replay starting at [{}]", startingSeqNo);
+            logger.info("performing file-based recovery followed by history replay starting at [{}]", startingSeqNo);
 
             try {
                 final int estimateNumOps = countNumberOfHistoryOperations(startingSeqNo);
