@@ -192,20 +192,22 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
 
         client().prepareUpdate(INDEX_NAME, String.valueOf(5)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + 5, "kkk" + 5).get();
         refresh(INDEX_NAME);
-        client().prepareUpdate(INDEX_NAME, String.valueOf(6)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + 6, "kkk" + 6).get();
-        refresh(INDEX_NAME);
         logger.info("after the first update, primary shard files: {}", Arrays.stream(primaryShard.store().directory().listAll()).toList());
         logger.info("after the first update, replica shard files: {}", Arrays.stream(replicaShard.store().directory().listAll()).toList());
+        client().prepareUpdate(INDEX_NAME, String.valueOf(6)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + 6, "kkk" + 6).get();
+        refresh(INDEX_NAME);
+        logger.info("after the second update, primary shard files: {}", Arrays.stream(primaryShard.store().directory().listAll()).toList());
+        logger.info("after the second update, replica shard files: {}", Arrays.stream(replicaShard.store().directory().listAll()).toList());
 
         internalCluster().restartNode(primary);
         ensureYellow(INDEX_NAME);
         final IndexShard newPrimaryShard = getIndexShard(replica, INDEX_NAME);
         logger.info("after restart primary, new primary shard files: {}", Arrays.stream(newPrimaryShard.store().directory().listAll()).toList());
         client().prepareUpdate(INDEX_NAME, String.valueOf(7)).setDoc(Requests.INDEX_CONTENT_TYPE, "jjj" + 7, "kkk" + 7).get();
-        logger.info("after the second update, new primary shard files: {}", Arrays.stream(newPrimaryShard.store().directory().listAll()).toList());
+        logger.info("after the third update, new primary shard files: {}", Arrays.stream(newPrimaryShard.store().directory().listAll()).toList());
         ensureGreen(INDEX_NAME);
         final IndexShard newReplicaShard = getIndexShard(primary, INDEX_NAME);
-        logger.info("after the second update, new replica shard files: {}", Arrays.stream(newReplicaShard.store().directory().listAll()).toList());
+        logger.info("after the third update, new replica shard files: {}", Arrays.stream(newReplicaShard.store().directory().listAll()).toList());
 
         assertBusy(() -> {
             Set<String> newPrimaryFiles = Arrays.stream(newPrimaryShard.store().directory().listAll()).collect(Collectors.toSet());
