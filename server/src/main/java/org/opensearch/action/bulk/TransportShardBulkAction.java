@@ -403,6 +403,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
                 listener,
                 ReplicaResponse::new
             );
+            logger.info("[{}] primary term validation request [{}]", nodeId, validationRequest);
             transportService.sendRequest(node, transportPrimaryTermValidationAction, validationRequest, transportOptions, handler);
         }
     }

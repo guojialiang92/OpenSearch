@@ -224,6 +224,7 @@ public class ReplicationOperation<
 
         final ShardRouting primaryRouting = primary.routingEntry();
 
+        logger.info("replicas count {}", replicationGroup.getReplicationTargets().size());
         for (final ShardRouting shardRouting : replicationGroup.getReplicationTargets()) {
             ReplicationProxyRequest<ReplicaRequest> proxyRequest = new Builder<ReplicaRequest>(
                 shardRouting,
