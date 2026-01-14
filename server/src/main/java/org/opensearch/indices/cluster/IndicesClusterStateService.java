@@ -459,7 +459,7 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
             }
 
             if (reason != null) {
-                logger.debug("{} removing index ({})", index, reason);
+                logger.info("{} removing index ({})", index, reason);
                 indicesService.removeIndex(index, reason, "removing index (" + reason + ")");
             }
         }

@@ -739,7 +739,7 @@ public class Coordinator extends AbstractLifecycleComponent implements Discovery
 
     void becomeCandidate(String method) {
         assert Thread.holdsLock(mutex) : "Coordinator mutex not held";
-        logger.debug(
+        logger.info(
             "{}: coordinator becoming CANDIDATE in term {} (was {}, lastKnownLeader was [{}])",
             method,
             getCurrentTerm(),

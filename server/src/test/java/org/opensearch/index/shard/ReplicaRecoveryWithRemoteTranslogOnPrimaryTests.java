@@ -38,8 +38,20 @@ public class ReplicaRecoveryWithRemoteTranslogOnPrimaryTests extends OpenSearchI
         .put(IndexMetadata.SETTING_REPLICATION_TYPE, ReplicationType.SEGMENT)
         .put(IndexMetadata.SETTING_REMOTE_STORE_ENABLED, "true")
         .put(IndexMetadata.SETTING_REMOTE_TRANSLOG_STORE_REPOSITORY, "translog-repo")
-        .put(IndexSettings.INDEX_REMOTE_TRANSLOG_BUFFER_INTERVAL_SETTING.getKey(), "100ms")
+        .put(IndexSettings.INDEX_REMOTE_TRANSLOG_BUFFER_INTERVAL_SETTING.getKey(), "12s")
         .build();
+
+    public void testWriteRemoteTranslog() throws Exception {
+        final Path remoteDir = createTempDir();
+        final String indexMapping = "{ \"" + MapperService.SINGLE_MAPPING_NAME + "\": {} }";
+        try (ReplicationGroup shards = createGroup(0, settings, indexMapping, new NRTReplicationEngineFactory(), remoteDir)) {
+            shards.startPrimary();
+            final IndexShard primary = shards.getPrimary();
+            int numDocs = shards.indexDocs(2);
+            shards.flush();
+        }
+        Thread.sleep(3000);
+    }
 
     public void testStartSequenceForReplicaRecovery() throws Exception {
         final Path remoteDir = createTempDir();

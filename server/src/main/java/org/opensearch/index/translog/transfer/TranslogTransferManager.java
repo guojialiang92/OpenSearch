@@ -218,6 +218,7 @@ public class TranslogTransferManager {
                 metadataUploadStartTime = System.nanoTime();
                 try {
                     transferService.uploadBlob(tlogMetadata, remoteMetadataTransferPath, WritePriority.HIGH);
+                    logger.info("upload meta file {} suceessed", tlogMetadata.getName());
                 } catch (Exception exception) {
                     remoteTranslogTransferTracker.addUploadTimeInMillis((System.nanoTime() - metadataUploadStartTime) / 1_000_000L);
                     remoteTranslogTransferTracker.addUploadBytesFailed(metadataBytesToUpload);

@@ -306,17 +306,17 @@ public class LeaderChecker {
                             return;
                         }
                         if (exp instanceof ConnectTransportException || exp.getCause() instanceof ConnectTransportException) {
-                            logger.debug(new ParameterizedMessage("leader [{}] disconnected during check", leader), exp);
+                            logger.info(new ParameterizedMessage("leader [{}] disconnected during check", leader), exp);
                             leaderFailed(new ConnectTransportException(leader, "disconnected during check", exp));
                             return;
                         } else if (exp.getCause() instanceof NodeHealthCheckFailureException) {
-                            logger.debug(new ParameterizedMessage("leader [{}] health check failed", leader), exp);
+                            logger.info(new ParameterizedMessage("leader [{}] health check failed", leader), exp);
                             leaderFailed(new NodeHealthCheckFailureException("node [" + leader + "] failed health checks", exp));
                             return;
                         }
                         long failureCount = failureCountSinceLastSuccess.incrementAndGet();
                         if (failureCount >= leaderCheckRetryCount) {
-                            logger.debug(
+                            logger.info(
                                 new ParameterizedMessage(
                                     "leader [{}] has failed {} consecutive checks (limit [{}] is {}); last failure was:",
                                     leader,
@@ -332,7 +332,7 @@ public class LeaderChecker {
                             return;
                         }
 
-                        logger.debug(
+                        logger.info(
                             new ParameterizedMessage(
                                 "{} consecutive failures (limit [{}] is {}) with leader [{}]",
                                 failureCount,
@@ -368,13 +368,13 @@ public class LeaderChecker {
                     }
                 });
             } else {
-                logger.trace("already closed, not failing leader");
+                logger.info("already closed, not failing leader");
             }
         }
 
         void handleDisconnectedNode(DiscoveryNode discoveryNode) {
             if (discoveryNode.equals(leader)) {
-                logger.debug("leader [{}] disconnected", leader);
+                logger.info("leader [{}] disconnected !!! ", leader);
                 leaderFailed(new NodeDisconnectedException(discoveryNode, "disconnected"));
             }
         }

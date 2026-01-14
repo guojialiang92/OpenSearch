@@ -515,6 +515,7 @@ public abstract class TransportWriteAction<
                 if (syncFailure.get() != null) {
                     respond.onFailure(syncFailure.get());
                 } else {
+                    logger.info("maybeFinish");
                     respond.onSuccess(refreshed.get());
                 }
             }
@@ -546,6 +547,7 @@ public abstract class TransportWriteAction<
                     syncFailure.set(ex);
                     maybeFinish();
                 });
+                logger.info("transport write operation finished");
             }
         }
     }
@@ -577,6 +579,7 @@ public abstract class TransportWriteAction<
             // then the replicas should not be marked as failed since they are
             // still up-to-date with the (now closed) primary shard
             if (exception instanceof PrimaryShardClosedException == false) {
+                logger.info("send fail shard request, replica {}, allocationId {}, primary term {}", replica.shardId(), replica.allocationId().getId(), primaryTerm);
                 shardStateAction.remoteShardFailed(
                     replica.shardId(),
                     replica.allocationId().getId(),

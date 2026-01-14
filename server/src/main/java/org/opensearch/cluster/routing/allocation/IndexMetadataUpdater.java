@@ -49,6 +49,7 @@ import org.opensearch.core.index.Index;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.remote.RemoteMigrationIndexMetadataUpdater;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -352,6 +353,11 @@ public class IndexMetadataUpdater extends RoutingChangesObserver.AbstractRouting
                         indexMetadataBuilder = IndexMetadata.builder(oldIndexMetadata);
                     }
                     indexMetadataBuilder.putInSyncAllocationIds(shardNumber, remainingInSyncAllocations);
+                }
+                try {
+                    throw new IOException("marking stale shard");
+                } catch (IOException e) {
+                    logger.warn(e);
                 }
                 logger.warn("{} marking unavailable shards as stale: {}", shardEntry.getKey(), idsToRemove);
             }

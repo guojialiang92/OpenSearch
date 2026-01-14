@@ -56,9 +56,13 @@ public abstract class BufferedAsyncIOProcessor<Item> extends AsyncIOProcessor<It
     }
 
     private void scheduleProcess() {
+        getLogger().info("scheduleProcess buffered translog");
         if (getQueue().isEmpty() == false && getPromiseSemaphore().tryAcquire()) {
             try {
-                threadpool.schedule(this::process, getBufferInterval(), getBufferProcessThreadPoolName());
+                TimeValue intervalTime = getBufferInterval();
+                getLogger().info("schedule interval time {}", intervalTime);
+                threadpool.schedule(this::process, intervalTime, getBufferProcessThreadPoolName());
+                getLogger().info("task has been scheduled");
             } catch (Exception e) {
                 getLogger().error("failed to schedule process");
                 processSchedulingFailure(e);
@@ -67,6 +71,8 @@ public abstract class BufferedAsyncIOProcessor<Item> extends AsyncIOProcessor<It
                 // and releasing the semaphore is handled by a subsequent refresh and not starved.
                 scheduleProcess();
             }
+        } else {
+            getLogger().info("can not be scheduled for buffered translog, queue is empty {}", getQueue().isEmpty());
         }
     }
 
@@ -77,6 +83,7 @@ public abstract class BufferedAsyncIOProcessor<Item> extends AsyncIOProcessor<It
     }
 
     private void process() {
+        getLogger().info("begin process buffered translog");
         drainAndProcessAndRelease(new ArrayList<>());
         scheduleProcess();
     }

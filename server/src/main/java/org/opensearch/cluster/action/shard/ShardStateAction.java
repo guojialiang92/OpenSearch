@@ -185,6 +185,11 @@ public class ShardStateAction {
         DiscoveryNode clusterManagerNode = currentState.nodes().getClusterManagerNode();
         Predicate<ClusterState> changePredicate = ClusterManagerNodeChangePredicate.build(currentState);
         if (clusterManagerNode == null) {
+            try {
+                throw new IOException("can not find cluster-manager");
+            } catch (IOException e) {
+                logger.warn(e);
+            }
             logger.warn("no cluster-manager known for action [{}] for shard entry [{}]", actionName, request);
             waitForNewClusterManagerAndRetry(actionName, observer, request, listener, changePredicate);
         } else {

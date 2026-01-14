@@ -342,11 +342,13 @@ public abstract class OpenSearchIndexLevelReplicationTestCase extends IndexShard
             for (int doc = 0; doc < numOfDoc; doc++) {
                 final IndexRequest indexRequest = new IndexRequest(index.getName()).id(Integer.toString(docId.incrementAndGet()))
                     .source("{}", MediaTypeRegistry.JSON);
+                logger.info("before index doc {}", doc);
                 final BulkItemResponse response = index(indexRequest);
                 if (response.isFailed()) {
                     throw response.getFailure().getCause();
                 } else {
                     assertEquals(DocWriteResponse.Result.CREATED, response.getResponse().getResult());
+                    logger.info("index doc {} success", doc);
                 }
             }
             return numOfDoc;

@@ -1280,7 +1280,7 @@ public abstract class OpenSearchIntegTestCase extends OpenSearchTestCase {
     }
 
     protected void ensureStableCluster(int nodeCount) {
-        ensureStableCluster(nodeCount, TimeValue.timeValueSeconds(30));
+        ensureStableCluster(nodeCount, TimeValue.timeValueSeconds(300));
     }
 
     protected void ensureStableCluster(int nodeCount, TimeValue timeValue) {

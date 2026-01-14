@@ -179,6 +179,7 @@ public class ReplicationOperation<
 
             @Override
             public void onResponse(Void aVoid) {
+                logger.info("runPostReplicationActions onResponse");
                 successfulShards.incrementAndGet();
                 try {
                     updateCheckPoints(primary.routingEntry(), primary::localCheckpoint, primary::globalCheckpoint);
@@ -263,7 +264,7 @@ public class ReplicationOperation<
 
             @Override
             public void onFailure(Exception replicaException) {
-                logger.trace(
+                logger.info(
                     () -> new ParameterizedMessage(
                         "[{}] failure while performing [{}] on replica {}, request [{}]",
                         shard.shardId(),

@@ -118,6 +118,7 @@ public abstract class AsyncIOProcessor<Item> {
             queue.drainTo(candidates);
             exception = processList(candidates);
         } finally {
+            getLogger().info("release semaphore");
             promiseSemaphore.release();
         }
         notifyList(candidates, exception);
