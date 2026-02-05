@@ -410,6 +410,7 @@ public class SegmentReplicationTargetServiceTests extends IndexShardTestCase {
         // skip post replication actions so we can assert execution counts. This will continue to process bc replica's pterm is not advanced
         // post replication.
         doReturn(true).when(serviceSpy).processLatestReceivedCheckpoint(any(), any());
+        doReturn(true).when(serviceSpy).processLatestReceivedCheckpoint(any(), any(), anyBoolean());
         // Create a Mockito spy of target to stub response of few method calls.
 
         CountDownLatch latch = new CountDownLatch(1);

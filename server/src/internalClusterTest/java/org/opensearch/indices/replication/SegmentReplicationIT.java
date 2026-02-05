@@ -195,8 +195,8 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
             PublishCheckpointAction.ACTION_NAME + TransportReplicationAction.REPLICA_ACTION_SUFFIX,
             (handler, request, channel, task) -> {
                 logger.info("replica receive publish checkpoint request");
-                latch2.countDown();
                 handler.messageReceived(request, channel, task);
+                latch2.countDown();
             }
         );
 
