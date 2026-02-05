@@ -288,6 +288,13 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
         return replicator.get(shardId);
     }
 
+    /**
+     * Invoked when a new checkpoint is received from a primary shard.
+     * It checks if a new checkpoint should be processed or not and starts replication if needed.
+     *
+     * @param receivedCheckpoint received checkpoint that is checked for processing
+     * @param replicaShard       replica shard on which checkpoint is received
+     */
     public void onNewCheckpoint(final ReplicationCheckpoint receivedCheckpoint, final IndexShard replicaShard) {
         onNewCheckpoint(receivedCheckpoint, replicaShard, false);
     }
@@ -488,6 +495,7 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
         return clusterService.state().nodes().get(primaryShard.currentNodeId());
     }
 
+    // visible to tests
     protected boolean processLatestReceivedCheckpoint(IndexShard replicaShard, Thread thread) {
         return processLatestReceivedCheckpoint(replicaShard, thread, false);
     }
@@ -526,6 +534,13 @@ public class SegmentReplicationTargetService extends AbstractLifecycleComponent 
         replicator.updateReplicationCheckpointStats(receivedCheckpoint, replicaShard);
     }
 
+    /**
+     * Start a round of replication and sync to at least the given checkpoint.
+     * @param indexShard - {@link IndexShard} replica shard
+     * @param checkpoint - {@link ReplicationCheckpoint} checkpoint to sync to
+     * @param listener - {@link ReplicationListener}
+     * @return {@link SegmentReplicationTarget} target event orchestrating the event.
+     */
     public SegmentReplicationTarget startReplication(
         final IndexShard indexShard,
         final ReplicationCheckpoint checkpoint,

@@ -138,6 +138,6 @@ public class SegmentReplicationTarget extends AbstractSegmentReplicationTarget {
 
     @Override
     public SegmentReplicationTarget retryCopy() {
-        return new SegmentReplicationTarget(indexShard, checkpoint, source, listener);
+        return new SegmentReplicationTarget(indexShard, checkpoint, source, true, listener);
     }
 }
