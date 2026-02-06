@@ -143,7 +143,13 @@ public class SegmentReplicationIT extends SegmentReplicationBaseIT {
         return randomBoolean() ? INDEX_NAME : "alias";
     }
 
-    public void testSegmentReplicationWithException() throws Exception {
+    public void testLocalSegmentReplicationWithException() throws Exception {
+        // this test stubs transport calls specific to node-node replication.
+        assumeFalse(
+            "Skipping the test as its not compatible with segment replication with remote store.",
+            segmentReplicationWithRemoteEnabled()
+        );
+
         final String primaryNode = internalCluster().startDataOnlyNode();
         createIndex(INDEX_NAME);
         ensureYellowAndNoInitializingShards(INDEX_NAME);
