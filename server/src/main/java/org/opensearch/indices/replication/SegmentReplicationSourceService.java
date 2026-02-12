@@ -132,11 +132,11 @@ public class SegmentReplicationSourceService extends AbstractLifecycleComponent 
             final ShardId shardId = request.getCheckpoint().getShardId();
             final IndexService indexService = indicesService.indexServiceSafe(shardId.getIndex());
             final IndexShard indexShard = indexService.getShard(shardId.id());
-            if (false == indexShard.isStartedPrimary() || indexShard.isHandoffInProgress()) {
+            if (false == indexShard.isPrimaryMode() || IndexShardState.STARTED != indexShard.state() || indexShard.isHandoffInProgress()) {
                 throw new IllegalStateException(
                     String.format(
                         Locale.ROOT,
-                        "%s must be a started primary shard that is not in the hand-off process. However, the current details are isPrimaryMode %s, state %s, isHandoffInProgress %s",
+                        "%s must be a started primary shard that is not in the hand-off process. However, the current states are isPrimaryMode %s, state %s, isHandoffInProgress %s",
                         shardId,
                         indexShard.isPrimaryMode(),
                         indexShard.state(),

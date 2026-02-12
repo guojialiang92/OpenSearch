@@ -149,7 +149,7 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
      * because the cluster-manager could have failed some of the in-sync shard copies and marked them as stale. That is ok though, as this
      * information is conveyed through cluster state updates, and the new primary relocation target will also eventually learn about those.
      */
-    boolean handoffInProgress;
+    volatile boolean handoffInProgress;
 
     /**
      * Boolean flag that indicates whether a relocation handoff completed (see {@link #completeRelocationHandoff}).
