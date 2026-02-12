@@ -846,6 +846,9 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
         return primaryMode;
     }
 
+    /**
+     * Returns whether the replication tracker is in primary relocation hand off progress.
+     */
     public boolean isHandoffInProgress() {
         return handoffInProgress;
     }
