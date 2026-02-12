@@ -846,6 +846,10 @@ public class ReplicationTracker extends AbstractIndexShardComponent implements L
         return primaryMode;
     }
 
+    public boolean isHandoffInProgress() {
+        return handoffInProgress;
+    }
+
     /**
      * Returns the current operation primary term.
      *
