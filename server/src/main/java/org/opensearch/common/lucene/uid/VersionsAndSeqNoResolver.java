@@ -187,10 +187,9 @@ public final class VersionsAndSeqNoResolver {
                     String prevCriteria = unwrappedReader.getSegmentInfo().info.getAttribute(CriteriaBasedCodec.BUCKET_NAME);
                     assert prevCriteria != null;
                     if (prevCriteria.equals(currentCriteria) == false) {
-                        throw new UnsupportedOperationException(
-                            "Updating grouping criteria is not allowed for context aware enabled indices.",
-                            null
-                        );
+                        // Different criteria owns this _id; skip this segment and continue
+                        // searching for a version within the same criteria namespace.
+                        continue;
                     }
                 }
 

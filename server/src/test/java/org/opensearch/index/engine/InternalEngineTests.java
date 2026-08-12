@@ -9202,7 +9202,7 @@ public class InternalEngineTests extends EngineTestCase {
     }
 
     @LockFeatureFlag(CONTEXT_AWARE_MIGRATION_EXPERIMENTAL_FLAG)
-    public void testDoesNotAllowGroupingCriteriaUpdate() throws IOException, InterruptedException {
+    public void testSameIdDifferentCriteriaCoexist() throws IOException, InterruptedException {
         final AtomicLong globalCheckpoint = new AtomicLong(SequenceNumbers.NO_OPS_PERFORMED);
         final IndexSettings indexSettings = IndexSettingsModule.newIndexSettings(
             "test",
@@ -9219,8 +9219,16 @@ public class InternalEngineTests extends EngineTestCase {
         ) {
             final ParsedDocument doc1 = testParsedDocument("1", null, testContextSpecificDocument("grouping_criteria"), B_1, null);
             final ParsedDocument doc2 = testParsedDocument("1", null, testContextSpecificDocument("grouping_criteria_update"), B_1, null);
-            engine.index(indexForDoc(doc1));
-            assertThrows(UnsupportedOperationException.class, () -> engine.index(indexForDoc(doc2)));
+            // Both index operations should succeed — each context has its own _id namespace
+            Engine.IndexResult result1 = engine.index(indexForDoc(doc1));
+            assertNull(result1.getFailure());
+            Engine.IndexResult result2 = engine.index(indexForDoc(doc2));
+            assertNull(result2.getFailure());
+            // After refresh, both documents should be searchable
+            engine.refresh("test");
+            try (Engine.Searcher searcher = engine.acquireSearcher("test")) {
+                assertEquals(2, searcher.getIndexReader().numDocs());
+            }
         }
     }
 

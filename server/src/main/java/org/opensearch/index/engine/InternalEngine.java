@@ -791,10 +791,26 @@ public class InternalEngine extends Engine {
                 Index index = (Index) op;
                 assert index.docs() != null && index.docs().isEmpty() == false;
                 if (documentIndexWriter.validateImmutableFieldNotUpdated(index.docs().get(0), op.uid().bytes())) {
-                    throw new UnsupportedOperationException(
-                        "Updating grouping criteria is not allowed for context aware enabled indices.",
-                        null
-                    );
+                    // The same _id exists in version map but belongs to a different criteria/context.
+                    // Fall back to Lucene reader to find the version within the same criteria namespace.
+                    String currentCriteria = index.docs().get(0).getGroupingCriteria();
+                    try (Searcher searcher = acquireSearcher("load_version", SearcherScope.INTERNAL)) {
+                        final VersionsAndSeqNoResolver.DocIdAndVersion docIdAndVersion =
+                            VersionsAndSeqNoResolver.loadDocIdAndVersion(
+                                searcher.getIndexReader(),
+                                op.uid(),
+                                loadSeqNo,
+                                currentCriteria
+                            );
+                        if (docIdAndVersion != null) {
+                            versionValue = new IndexVersionValue(
+                                null, docIdAndVersion.version, docIdAndVersion.seqNo, docIdAndVersion.primaryTerm
+                            );
+                        } else {
+                            // Doc truly does not exist in this criteria namespace
+                            versionValue = null;
+                        }
+                    }
                 }
             }
         return versionValue;
@@ -1107,6 +1123,14 @@ public class InternalEngine extends Engine {
         final VersionValue versionValue = versionMap.getVersionForAssert(index.uid().bytes());
         if (versionValue != null) {
             if (versionValue.isDelete() == false || allowDeleted == false) {
+                // In context-aware mode, the same _id may exist in the version map for a different criteria.
+                // This is valid — each criteria has its own _id namespace.
+                if (index.docs() != null && index.docs().isEmpty() == false
+                    && index.docs().get(0).getGroupingCriteria() != null
+                    && documentIndexWriter.validateImmutableFieldNotUpdated(index.docs().get(0), index.uid().bytes())) {
+                    // Version map entry belongs to a different criteria; this is acceptable for a cross-criteria create.
+                    return true;
+                }
                 throw new AssertionError("doc [" + index.id() + "] exists in version map (version " + versionValue + ")");
             }
         } else {
